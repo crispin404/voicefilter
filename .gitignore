@@ -2,11 +2,17 @@
 # configuration yaml files
 config/*
 !config/default.yaml
+!config/enhancement.yaml
 
 
 temp/
 chkpt/
 logs/
+metadata/
+splits/
+manifests/
+processed/
+outputs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

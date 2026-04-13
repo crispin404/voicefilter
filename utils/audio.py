@@ -3,6 +3,52 @@
 
 import librosa
 import numpy as np
+import soundfile as sf
+
+
+def load_wav(path, sample_rate=None, mono=True):
+    wav, sr = librosa.load(path, sr=sample_rate, mono=mono)
+    return wav.astype(np.float32), sr
+
+
+def to_mono(wav):
+    if wav.ndim == 1:
+        return wav.astype(np.float32)
+    return librosa.to_mono(wav).astype(np.float32)
+
+
+def peak_normalize(wav, peak=0.95):
+    wav = wav.astype(np.float32)
+    max_abs = np.max(np.abs(wav)) if wav.size > 0 else 0.0
+    if max_abs < 1e-8:
+        return wav
+    return wav / max_abs * peak
+
+
+def repeat_pad_wav(wav, sample_rate, target_seconds):
+    target_length = int(round(sample_rate * target_seconds))
+    if target_length <= 0:
+        return wav.astype(np.float32)
+    if wav.size == 0:
+        return np.zeros(target_length, dtype=np.float32)
+    repeats = int(np.ceil(float(target_length) / float(wav.size)))
+    padded = np.tile(wav, repeats)[:target_length]
+    return padded.astype(np.float32)
+
+
+def pad_or_trim_wav(wav, target_length):
+    wav = wav.astype(np.float32)
+    if target_length <= 0:
+        return wav
+    if wav.size >= target_length:
+        return wav[:target_length]
+    padded = np.zeros(target_length, dtype=np.float32)
+    padded[:wav.size] = wav
+    return padded
+
+
+def save_wav(path, wav, sample_rate):
+    sf.write(path, wav.astype(np.float32), sample_rate)
 
 
 class Audio():

@@ -1,185 +1,253 @@
-# VoiceFilter
+# VoiceFilter 跨域元音条件鼾声增强
 
-## Note from Seung-won (2020.10.25)
+这个仓库仍然保留原始 `VoiceFilter` 相关代码，但已经补充了一套新的主任务流程：
 
-Hi everyone! It's Seung-won from MINDs Lab, Inc.
-It's been a long time since I've released this open-source,
-and I didn't expect this repository to grab such a great amount of attention for a long time.
-I would like to thank everyone for giving such attention, and also Mr. Quan Wang (the first author of the VoiceFilter paper) for referring this project in his paper.
+- 条件输入：同一被试的 5 段清醒短元音 `a/e/i/o/u`
+- 主输入：30 秒“鼾声 + 环境音”混合音
+- 目标输出：对应的干净鼾声音频
 
-Actually, this project was done by me when it was only 3 months after I started studying deep learning & speech separation without a supervisor in the relevant field.
-Back then, I didn't know what is a power-law compression, and the correct way to validate/test the models.
-Now that I've spent more time on deep learning & speech since then (I also wrote a paper published at [Interspeech 2020](https://arxiv.org/abs/2005.03295) 😊),
-I can observe some obvious mistakes that I've made.
-Those issues were kindly raised by GitHub users; please refer to the
-[Issues](https://github.com/mindslab-ai/voicefilter/issues?q=is%3Aissue+) and [Pull Requests](https://github.com/mindslab-ai/voicefilter/pulls) for that.
-That being said, this repository can be quite unreliable,
-and I would like to remind everyone to use this code at their own risk (as specified in LICENSE).
+当前改造优先跑通以下链路：
 
-Unfortunately, I can't afford extra time on revising this project or reviewing the Issues / Pull Requests.
-Instead, I would like to offer some pointers to newer, more reliable resources:
+1. 数据扫描与被试级 split
+2. 音频预处理到 `16k / mono / float32`
+3. 5 段元音 embedding 预计算与均值聚合
+4. 基于 manifest 的条件增强训练
+5. 30 秒整段滑窗推理
+6. test 集基础评估
 
-- [VoiceFilter-Lite](https://arxiv.org/abs/2009.04323):
-This is a newer version of VoiceFilter presented at Interspeech 2020, which is also written by Mr. Quan Wang (and his colleagues at Google).
-I highly recommend checking this paper, since it focused on a more realistic situation where VoiceFilter is needed.
-- [List of VoiceFilter implementation available on GitHub](https://paperswithcode.com/paper/voicefilter-targeted-voice-separation-by):
-In March 2019, this repository was the only available open-source implementation of VoiceFilter.
-However, much better implementations that deserve more attention became available across GitHub.
-Please check them, and choose the one that meets your demand.
-- [PyTorch Lightning](https://www.pytorchlightning.ai/):
-Back in 2019, I could not find a great deep-learning project template for myself,
-so I and my colleagues had used this project as a template for other new projects.
-For people who are searching for such project template, I would like to strongly recommend PyTorch Lightning.
-Even though I had done a lot of effort into developing my own template during 2019
-([VoiceFilter](https://github.com/mindslab-ai/voicefilter) -> [RandWireNN](https://github.com/seungwonpark/RandWireNN)
--> [MelNet](https://github.com/Deepest-Project/MelNet) -> [MelGAN](https://github.com/seungwonpark/melgan)),
-I found PyTorch Lightning much better than my own template.
-
-Thanks for reading, and I wish everyone good health during the global pandemic situation.
-
-Best regards, Seung-won Park
-
----
-
-Unofficial PyTorch implementation of Google AI's:
-[VoiceFilter: Targeted Voice Separation by Speaker-Conditioned Spectrogram Masking](https://arxiv.org/abs/1810.04826).
-
-![](./assets/voicefilter.png)
-
-## Result
-
-- Training took about 20 hours on AWS p3.2xlarge(NVIDIA V100).
-
-### Audio Sample
-
-- Listen to audio sample at webpage: http://swpark.me/voicefilter/
-
-
-### Metric
-
-| Median SDR             | Paper | Ours |
-| ---------------------- | ----- | ---- |
-| before VoiceFilter     |  2.5  |  1.9 |
-| after VoiceFilter      | 12.6  | 10.2 |
-
-![](./assets/sdr-result.png)
-
-- SDR converged at 10, which is slightly lower than paper's.
-
-
-## Dependencies
-
-1. Python and packages
-
-    This code was tested on Python 3.6 with PyTorch 1.0.1.
-    Other packages can be installed by:
-
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-1. Miscellaneous 
-
-    [ffmpeg-normalize](https://github.com/slhck/ffmpeg-normalize) is used for resampling and normalizing wav files.
-    See README.md of [ffmpeg-normalize](https://github.com/slhck/ffmpeg-normalize/blob/master/README.md) for installation.
-
-## Prepare Dataset
-
-1. Download LibriSpeech dataset
-
-    To replicate VoiceFilter paper, get LibriSpeech dataset at http://www.openslr.org/12/.
-    `train-clear-100.tar.gz`(6.3G) contains speech of 252 speakers, and `train-clear-360.tar.gz`(23G) contains 922 speakers.
-    You may use either, but the more speakers you have in dataset, the more better VoiceFilter will be.
-
-1. Resample & Normalize wav files
-
-    First, unzip `tar.gz` file to desired folder:
-    ```bash
-    tar -xvzf train-clear-360.tar.gz
-    ```
-
-    Next, copy `utils/normalize-resample.sh` to root directory of unzipped data folder. Then:
-    ```bash
-    vim normalize-resample.sh # set "N" as your CPU core number.
-    chmod a+x normalize-resample.sh
-    ./normalize-resample.sh # this may take long
-    ```
-
-1. Edit `config.yaml`
-
-    ```bash
-    cd config
-    cp default.yaml config.yaml
-    vim config.yaml
-    ```
-
-1. Preprocess wav files
-
-    In order to boost training speed, perform STFT for each files before training by:
-    ```bash
-    python generator.py -c [config yaml] -d [data directory] -o [output directory] -p [processes to run]
-    ```
-    This will create 100,000(train) + 1000(test) data. (About 160G)
-
-
-## Train VoiceFilter
-
-1. Get pretrained model for speaker recognition system
-
-    VoiceFilter utilizes speaker recognition system ([d-vector embeddings](https://google.github.io/speaker-id/publications/GE2E/)).
-    Here, we provide pretrained model for obtaining d-vector embeddings.
-
-    This model was trained with [VoxCeleb2](http://www.robots.ox.ac.uk/~vgg/data/voxceleb/vox2.html) dataset,
-    where utterances are randomly fit to time length [70, 90] frames.
-    Tests are done with window 80 / hop 40 and have shown equal error rate about 1%.
-    Data used for test were selected from first 8 speakers of [VoxCeleb1](http://www.robots.ox.ac.uk/~vgg/data/voxceleb/vox1.html) test dataset, where 10 utterances per each speakers are randomly selected.
-    
-    **Update**: Evaluation on VoxCeleb1 selected pair showed 7.4% EER.
-    
-    The model can be downloaded at [this GDrive link](https://drive.google.com/file/d/1YFmhmUok-W76JkrfA0fzQt3c-ZsfiwfL/view?usp=sharing).
-
-1. Run
-
-    After specifying `train_dir`, `test_dir` at `config.yaml`, run:
-    ```bash
-    python trainer.py -c [config yaml] -e [path of embedder pt file] -m [name]
-    ```
-    This will create `chkpt/name` and `logs/name` at base directory(`-b` option, `.` in default)
-
-1. View tensorboardX
-
-    ```bash
-    tensorboard --logdir ./logs
-    ```
-    
-    ![](./assets/tensorboard.png)
-
-1. Resuming from checkpoint
-
-    ```bash
-    python trainer.py -c [config yaml] --checkpoint_path [chkpt/name/chkpt_{step}.pt] -e [path of embedder pt file] -m name
-    ```
-
-## Evaluate
+## 依赖安装
 
 ```bash
-python inference.py -c [config yaml] -e [path of embedder pt file] --checkpoint_path [path of chkpt pt file] -m [path of mixed wav file] -r [path of reference wav file] -o [output directory]
+pip install -r requirements.txt
 ```
 
-## Possible improvments
+## 数据目录要求
 
-- Try power-law compressed reconstruction error as loss function, instead of MSE. (See [#14](https://github.com/mindslab-ai/voicefilter/issues/14))
+原始数据根目录下应为被试文件夹，每个被试至少包含：
 
-## Author
+```text
+data_root/
+  2022_09_06_张三/
+    元音/
+      a1_1.wav
+      e1_1.wav
+      i1_1.wav
+      o1_1.wav
+      u1_1.wav
+    鼾声/
+      hs_01_1.wav
+      ...
+      hs_01_10.wav
+    合成声_1/
+      hs_01_jb_01.wav
+      hs_01_km_10.wav
+      ...
+    info.txt
+```
 
-[Seungwon Park](http://swpark.me) at MINDsLab (yyyyy@snu.ac.kr, swpark@mindslab.ai)
+命名规则默认按以下方式匹配：
+
+- 混合音：`hs_{inner_id}_{noise_type}_{snore_index}.wav`
+- 干净鼾声：`hs_{inner_id}_{snore_index}.wav`
+- 例如：`hs_01_jb_03.wav -> hs_01_3.wav`
+
+## 配置文件
+
+主配置文件为 [config/enhancement.yaml](./config/enhancement.yaml)。
+
+关键字段如下：
+
+- `data.manifest_train / manifest_val / manifest_test`：训练、验证、测试 manifest
+- `audio.sample_rate`：统一采样率，默认 `16000`
+- `data.segment_seconds`：训练随机裁切长度，默认 `3.0`
+- `data.inference_window_seconds`：长音频推理窗口，默认 `3.0`
+- `data.inference_hop_seconds`：长音频推理 hop，默认 `1.5`
+- `embedder.emb_dim`：元音 embedding 维度，默认 `256`
+- `model.use_embedding_adapter`：是否启用轻量条件适配器
+- `train.batch_size / learning_rate / num_epochs / save_dir`：训练超参数和输出目录
+
+## 七步工作流
+
+### 第一步：扫描数据、生成 split、生成 manifest
+
+扫描所有被试目录并生成 `metadata/subjects.json`：
+
+```bash
+python scripts/scan_dataset.py --data-root F:/your_raw_dataset --output metadata/subjects.json
+```
+
+按被试级生成 `train / val / test`：
+
+```bash
+python scripts/build_subject_splits.py --subjects metadata/subjects.json --output-dir splits --seed 42
+```
+
+可选解析 `info.txt` 到 CSV：
+
+```bash
+python scripts/parse_info_txt.py --subjects metadata/subjects.json --output metadata/subject_info.csv
+```
+
+生成增强任务 manifest：
+
+```bash
+python scripts/build_manifests.py --subjects metadata/subjects.json --splits-dir splits --output-dir manifests
+```
+
+输出位置：
+
+- `metadata/subjects.json`
+- `metadata/subject_info.csv`
+- `splits/train_subjects.txt`
+- `splits/val_subjects.txt`
+- `splits/test_subjects.txt`
+- `manifests/enhancement_manifest_train.jsonl`
+- `manifests/enhancement_manifest_val.jsonl`
+- `manifests/enhancement_manifest_test.jsonl`
+
+### 第二步：预处理音频
+
+把所有元音、干净鼾声、混合音统一处理到 `16k / mono`，并把元音 repeat-padding 到 1 秒：
+
+```bash
+python scripts/preprocess_audio.py --subjects metadata/subjects.json --processed-root processed --sample-rate 16000 --vowel-seconds 1.0
+```
+
+输出位置：
+
+- `processed/vowel/{subject_id}/*.wav`
+- `processed/clean/{subject_id}/*.wav`
+- `processed/mix/{subject_id}/*.wav`
+
+建议在预处理完成后重新执行一次 `build_manifests.py`，确保 manifest 指向处理后的音频。
+
+```bash
+python scripts/build_manifests.py --subjects metadata/subjects.json --splits-dir splits --output-dir manifests --processed-root processed
+```
+
+### 第三步：预计算元音 embedding
+
+若你有原始 speaker embedder 权重，可通过 `--embedder-path` 指定；没有也可以直接运行，脚本会使用随机初始化接口完成流程。
+
+```bash
+python scripts/precompute_vowel_embeddings.py -c config/enhancement.yaml --subjects metadata/subjects.json --processed-root processed --output-dir processed/embeddings
+```
+
+带预训练 embedder 的示例：
+
+```bash
+python scripts/precompute_vowel_embeddings.py -c config/enhancement.yaml --subjects metadata/subjects.json --processed-root processed --output-dir processed/embeddings --embedder-path path/to/embedder.pt
+```
+
+输出位置：
+
+- `processed/embeddings/{subject_id}.npy`
+
+### 第四步：训练条件增强模型
+
+训练脚本会：
+
+- 从 manifest 读取 `mix_path / clean_path / embedding_path`
+- 从 30 秒配对音频中随机裁切对齐的 3 秒片段
+- 用原始 `VoiceFilter` 主干预测 mask
+- 默认使用频谱 `L1` 损失
+
+训练命令：
+
+```bash
+python scripts/train_enhancement.py -c config/enhancement.yaml
+```
+
+断点续训：
+
+```bash
+python scripts/train_enhancement.py -c config/enhancement.yaml --checkpoint-path outputs/checkpoints/latest.pt
+```
+
+输出位置：
+
+- `outputs/checkpoints/latest.pt`
+- `outputs/checkpoints/best.pt`
+- `outputs/logs/train.log`
+- `outputs/logs/` 下的 TensorBoard 标量
+
+### 第五步：30 秒整段推理
+
+输入某个被试的 5 段元音和一条 30 秒混合音，脚本会：
+
+- 先在线计算 5 段元音的聚合 embedding
+- 再对混合音按 `3s window / 1.5s hop` 滑窗推理
+- 最后 overlap-add 重建整段增强音频
+
+```bash
+python scripts/infer_enhancement_long.py -c config/enhancement.yaml --checkpoint-path outputs/checkpoints/best.pt --mixed-file processed/mix/{subject_id}/hs_01_jb_03.wav --vowel-dir processed/vowel/{subject_id} --output-path outputs/enhanced_wavs/{subject_id}_hs_01_jb_03.wav
+```
+
+如果需要与训练时一致的 embedder 权重：
+
+```bash
+python scripts/infer_enhancement_long.py -c config/enhancement.yaml --checkpoint-path outputs/checkpoints/best.pt --mixed-file processed/mix/{subject_id}/hs_01_jb_03.wav --vowel-dir processed/vowel/{subject_id} --embedder-path path/to/embedder.pt --output-path outputs/enhanced_wavs/{subject_id}_hs_01_jb_03.wav
+```
+
+输出位置：
+
+- `outputs/enhanced_wavs/*.wav`
+
+### 第六步：基础评估
+
+在 test manifest 上批量推理并输出 CSV：
+
+```bash
+python scripts/evaluate_enhancement.py -c config/enhancement.yaml --checkpoint-path outputs/checkpoints/best.pt --output-csv outputs/eval/metrics.csv
+```
+
+如果 test manifest 没有预计算 embedding，也可以加上 `--embedder-path` 让脚本回退到在线计算。
+
+输出位置：
+
+- `outputs/eval/metrics.csv`
+- `outputs/eval/enhanced_wavs/*.wav`
+
+默认统计：
+
+- `SDR`
+- `SI-SDR`
+- `SNR improvement`
+- `mag_l1`
+
+### 第七步：查看结果与复核
+
+建议最终至少检查：
+
+- `subjects.json` 是否完整覆盖所有被试
+- split 是否是被试级划分，而不是音频级
+- manifest 是否都指向 `processed/` 下的音频
+- `processed/embeddings/` 是否为每个被试都有一个 `.npy`
+- 训练是否至少能完整跑通一个 epoch
+- 推理是否能稳定输出 30 秒 wav
+
+## 新增脚本一览
+
+- `scripts/scan_dataset.py`
+- `scripts/build_subject_splits.py`
+- `scripts/parse_info_txt.py`
+- `scripts/build_manifests.py`
+- `scripts/preprocess_audio.py`
+- `scripts/precompute_vowel_embeddings.py`
+- `scripts/train_enhancement.py`
+- `scripts/infer_enhancement_long.py`
+- `scripts/evaluate_enhancement.py`
+
+## 与原仓库的关系
+
+本次改造没有重写整个项目，仍然复用了原仓库中的：
+
+- `utils/audio.py` 频谱特征逻辑
+- `model/model.py` 的 `VoiceFilter` 主干
+- `model/embedder.py` 的 speaker embedder 结构
+
+原始 `generator.py`、`trainer.py`、`inference.py` 仍保留，便于回看或兼容旧流程；新的主任务请优先使用 `scripts/` 下的新脚本。
 
 ## License
 
 Apache License 2.0
-
-This repository contains codes adapted/copied from the followings:
-- [utils/adabound.py](./utils/adabound.py) from https://github.com/Luolc/AdaBound (Apache License 2.0)
-- [utils/audio.py](./utils/audio.py) from https://github.com/keithito/tacotron (MIT License)
-- [utils/hparams.py](./utils/hparams.py) from https://github.com/HarryVolek/PyTorch_Speaker_Verification (No License specified)
-- [utils/normalize-resample.sh](./utils/normalize-resample.sh.) from https://unix.stackexchange.com/a/216475

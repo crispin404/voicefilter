@@ -1,0 +1,45 @@
+---
+audio:
+  n_fft: 1200
+  num_freq: 601
+  sample_rate: 16000
+  hop_length: 160
+  win_length: 400
+  min_level_db: -100.0
+  ref_level_db: 20.0
+  preemphasis: 0.97
+  power: 0.30
+---
+model:
+  lstm_dim: 400
+  fc1_dim: 600
+  fc2_dim: 601
+  use_embedding_adapter: true
+  adapter_hidden_dim: 256
+---
+embedder:
+  num_mels: 40
+  n_fft: 512
+  emb_dim: 256
+  lstm_hidden: 768
+  lstm_layers: 3
+  window: 80
+  stride: 40
+---
+data:
+  data_root: data/raw
+  processed_root: processed
+  manifest_train: manifests/enhancement_manifest_train.jsonl
+  manifest_val: manifests/enhancement_manifest_val.jsonl
+  manifest_test: manifests/enhancement_manifest_test.jsonl
+  segment_seconds: 3.0
+  inference_window_seconds: 3.0
+  inference_hop_seconds: 1.5
+---
+train:
+  batch_size: 4
+  num_workers: 0
+  learning_rate: 0.0005
+  num_epochs: 10
+  seed: 42
+  save_dir: outputs
