@@ -21,6 +21,8 @@ if __name__ == '__main__':
                         help="path of checkpoint pt file")
     parser.add_argument('-m', '--model', type=str, required=True,
                         help="Name of the model. Used for both logging and saving checkpoints.")
+    parser.add_argument('--device', type=str, default='auto',
+                        help='cpu, cuda, or auto (default)')
     args = parser.parse_args()
 
     hp = HParam(args.config)

@@ -11,15 +11,24 @@ from model.model import VoiceFilter
 from model.embedder import SpeechEmbedder
 
 
+def build_device(device_name):
+    if device_name == 'auto':
+        return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    return torch.device(device_name)
+
+
 def train(args, pt_dir, chkpt_path, trainloader, testloader, writer, logger, hp, hp_str):
+    device = build_device(getattr(args, 'device', 'auto'))
+    logger.info("Using device: %s", device)
+
     # load embedder
-    embedder_pt = torch.load(args.embedder_path)
-    embedder = SpeechEmbedder(hp).cuda()
+    embedder_pt = torch.load(args.embedder_path, map_location=device)
+    embedder = SpeechEmbedder(hp).to(device)
     embedder.load_state_dict(embedder_pt)
     embedder.eval()
 
     audio = Audio(hp)
-    model = VoiceFilter(hp).cuda()
+    model = VoiceFilter(hp).to(device)
     if hp.train.optimizer == 'adabound':
         optimizer = AdaBound(model.parameters(),
                              lr=hp.train.adabound.initial,
@@ -34,7 +43,7 @@ def train(args, pt_dir, chkpt_path, trainloader, testloader, writer, logger, hp,
 
     if chkpt_path is not None:
         logger.info("Resuming from checkpoint: %s" % chkpt_path)
-        checkpoint = torch.load(chkpt_path)
+        checkpoint = torch.load(chkpt_path, map_location=device)
         model.load_state_dict(checkpoint['model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
         step = checkpoint['step']
@@ -50,12 +59,12 @@ def train(args, pt_dir, chkpt_path, trainloader, testloader, writer, logger, hp,
         while True:
             model.train()
             for dvec_mels, target_mag, mixed_mag in trainloader:
-                target_mag = target_mag.cuda()
-                mixed_mag = mixed_mag.cuda()
+                target_mag = target_mag.to(device)
+                mixed_mag = mixed_mag.to(device)
 
                 dvec_list = list()
                 for mel in dvec_mels:
-                    mel = mel.cuda()
+                    mel = mel.to(device)
                     dvec = embedder(mel)
                     dvec_list.append(dvec)
                 dvec = torch.stack(dvec_list, dim=0)
@@ -94,7 +103,7 @@ def train(args, pt_dir, chkpt_path, trainloader, testloader, writer, logger, hp,
                         'hp_str': hp_str,
                     }, save_path)
                     logger.info("Saved checkpoint to: %s" % save_path)
-                    validate(audio, model, embedder, testloader, writer, step)
+                    validate(audio, model, embedder, testloader, writer, step, device)
     except Exception as e:
         logger.info("Exiting due to exception: %s" % e)
         traceback.print_exc()
