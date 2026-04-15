@@ -13,7 +13,15 @@ REQUIRED_DIRS = {
 }
 OPTIONAL_DIR_KEYS = {'mix_dir'}
 
-VOWEL_FILES = ['a1_1.wav', 'e1_1.wav', 'i1_1.wav', 'o1_1.wav', 'u1_1.wav']
+VOWEL_KEYS = ['a', 'e', 'i', 'o', 'u']
+VOWEL_CANONICAL_FILENAMES = {
+    'a': 'a1_1.wav',
+    'e': 'e1_1.wav',
+    'i': 'i1_1.wav',
+    'o': 'o1_1.wav',
+    'u': 'u1_1.wav',
+}
+VOWEL_FILES = [VOWEL_CANONICAL_FILENAMES[key] for key in VOWEL_KEYS]
 SNORE_PATTERN = re.compile(r'^hs_(\d+)_([0-9]+)\.wav$', re.IGNORECASE)
 MIX_PATTERN = re.compile(r'^hs_(\d+)_([a-zA-Z]+)_([0-9]+)\.wav$', re.IGNORECASE)
 
@@ -52,6 +60,76 @@ def list_wavs_if_dir(path):
 
 def strip_wav_extension(filename):
     return os.path.splitext(os.path.basename(filename))[0]
+
+
+def vowel_key_from_filename(filename):
+    stem = strip_wav_extension(filename).strip().lower()
+    if not stem:
+        return None
+    key = stem[0]
+    if key not in VOWEL_CANONICAL_FILENAMES:
+        return None
+    return key
+
+
+def discover_vowel_files(vowel_dir):
+    candidates = {key: [] for key in VOWEL_KEYS}
+    for path in list_wavs_if_dir(vowel_dir):
+        vowel_key = vowel_key_from_filename(path)
+        if vowel_key is None:
+            continue
+        candidates[vowel_key].append(normalize_path(path))
+
+    selected = {}
+    conflicts = {}
+    for key in VOWEL_KEYS:
+        key_candidates = candidates[key]
+        if key_candidates:
+            selected[key] = key_candidates[0]
+            if len(key_candidates) > 1:
+                conflicts[key] = list(key_candidates)
+
+    missing = [key for key in VOWEL_KEYS if key not in selected]
+    return {
+        'selected': selected,
+        'missing': missing,
+        'candidates': {key: list(paths) for key, paths in candidates.items() if paths},
+        'conflicts': conflicts,
+    }
+
+
+def get_subject_vowel_map(subject):
+    mapping = {}
+    raw_paths = subject.get('vowel_paths') or []
+    for index, key in enumerate(VOWEL_KEYS):
+        if index >= len(raw_paths):
+            break
+        path = raw_paths[index]
+        if path and os.path.isfile(path):
+            mapping[key] = normalize_path(path)
+
+    if len(mapping) == len(VOWEL_KEYS):
+        return mapping
+
+    discovered = discover_vowel_files(subject.get('vowel_dir'))
+    for key, path in discovered['selected'].items():
+        mapping[key] = path
+    return {key: mapping[key] for key in VOWEL_KEYS if key in mapping}
+
+
+def iter_subject_vowel_items(subject):
+    mapping = get_subject_vowel_map(subject)
+    return [(key, mapping.get(key, '')) for key in VOWEL_KEYS]
+
+
+def resolve_subject_vowel_paths(subject, processed_root=None):
+    if processed_root is not None:
+        subject_id = subject['subject_id']
+        return [
+            normalize_path(os.path.join(processed_root, 'vowel', subject_id, VOWEL_CANONICAL_FILENAMES[key]))
+            for key in VOWEL_KEYS
+        ]
+    return [path for _, path in iter_subject_vowel_items(subject) if path]
 
 
 def subject_mix_dir(subject, mix_dir_name=None):
@@ -100,10 +178,15 @@ def scan_subjects(data_root):
         item['exists'] = len(missing) == 0
         item['missing'] = missing
         item['optional_missing'] = optional_missing
-        item['vowel_paths'] = [
-            normalize_path(os.path.join(subject_dir, REQUIRED_DIRS['vowel_dir'], filename))
-            for filename in VOWEL_FILES
-        ]
+        vowel_info = discover_vowel_files(item['vowel_dir'])
+        item['missing_vowels'] = vowel_info['missing']
+        if vowel_info['missing']:
+            missing.extend(['元音:%s' % key for key in vowel_info['missing']])
+        item['vowel_paths'] = [vowel_info['selected'].get(key, '') for key in VOWEL_KEYS]
+        item['vowel_candidates'] = vowel_info['candidates']
+        item['vowel_conflicts'] = vowel_info['conflicts']
+        item['exists'] = len(missing) == 0
+        item['missing'] = missing
         item['snore_paths'] = [normalize_path(path) for path in list_wavs(os.path.join(subject_dir, REQUIRED_DIRS['snore_dir']))]
         item['mix_paths'] = [normalize_path(path) for path in list_wavs(os.path.join(subject_dir, REQUIRED_DIRS['mix_dir']))]
         subjects.append(item)
@@ -177,13 +260,13 @@ def split_subjects(subjects, train_count, val_count, test_count, seed):
 
 def save_subject_ids(subjects, path):
     ensure_dir(os.path.dirname(path))
-    with open(path, 'w', encoding='utf-8') as f:
+    with open(path, 'w', encoding='utf-8-sig') as f:
         for subject in subjects:
             f.write(subject['subject_id'] + '\n')
 
 
 def load_subject_ids(path):
-    with open(path, 'r', encoding='utf-8') as f:
+    with open(path, 'r', encoding='utf-8-sig') as f:
         return [line.strip() for line in f if line.strip()]
 
 
@@ -277,7 +360,6 @@ def build_manifest_rows(subjects, subject_ids, processed_root=None, mix_dir_name
 
 
 def build_subject_manifest_rows(subject, processed_root=None, mix_dir_name=None, snr_lookup=None):
-    raw_vowel_dir = subject['vowel_dir']
     raw_snore_dir = subject['snore_dir']
     raw_mix_dir = subject_mix_dir(subject, mix_dir_name=mix_dir_name)
 
@@ -305,10 +387,7 @@ def build_subject_manifest_rows(subject, processed_root=None, mix_dir_name=None,
             'mix_path': normalize_path(resolve_processed_audio_path(mix_path, subject['subject_id'], 'mix', processed_root)),
             'noise_type': mix_meta['noise_type'],
             'snore_index': mix_meta['snore_index'],
-            'vowel_paths': [
-                normalize_path(resolve_processed_audio_path(os.path.join(raw_vowel_dir, filename), subject['subject_id'], 'vowel', processed_root))
-                for filename in VOWEL_FILES
-            ],
+            'vowel_paths': resolve_subject_vowel_paths(subject, processed_root=processed_root),
             'embedding_path': normalize_path(resolve_embedding_path(subject['subject_id'], processed_root)),
             'info_path': normalize_path(subject['info_path']),
         }

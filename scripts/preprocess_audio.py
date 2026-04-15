@@ -16,10 +16,11 @@ from utils.audio import (
     save_wav,
 )
 from utils.dataset_index import (
-    VOWEL_FILES,
+    VOWEL_CANONICAL_FILENAMES,
     build_clean_index,
     build_snr_lookup,
     ensure_dir,
+    iter_subject_vowel_items,
     list_subject_mix_paths,
     load_csv_rows,
     load_jsonl,
@@ -147,13 +148,20 @@ def preprocess_subject(subject, processed_root, sample_rate, vowel_seconds, pair
     ensure_dir(clean_out_dir)
     ensure_dir(mix_out_dir)
 
-    for vowel_name in VOWEL_FILES:
-        src_path = os.path.join(subject['vowel_dir'], vowel_name)
-        if not os.path.isfile(src_path):
+    for vowel_key, src_path in iter_subject_vowel_items(subject):
+        dst_path = os.path.join(vowel_out_dir, VOWEL_CANONICAL_FILENAMES[vowel_key])
+        if not src_path or not os.path.isfile(src_path):
+            warn('subject=%s missing vowel=%s' % (subject_id, vowel_key))
             continue
-        dst_path = os.path.join(vowel_out_dir, vowel_name)
         preprocess_vowel_file(src_path, dst_path, sample_rate=sample_rate, repeat_seconds=vowel_seconds)
         counts['vowel'] += 1
+
+    for vowel_key, candidates in sorted((subject.get('vowel_candidates') or {}).items()):
+        if len(candidates) > 1:
+            warn(
+                'subject=%s vowel=%s multiple candidates=%s selected=%s'
+                % (subject_id, vowel_key, candidates, candidates[0])
+            )
 
     mix_paths = list_subject_mix_paths(subject, mix_dir_name=mix_dir_name)
     clean_index = build_clean_index(subject['snore_dir'])

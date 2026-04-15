@@ -17,6 +17,294 @@
 7. 基于 manifest 进行条件增强训练
 8. 执行长音频推理与基础评估
 
+## 五人数据 CPU 跑通
+
+这一节专门对应你当前这次实验：
+
+- 数据根目录固定为 `F:\五人跑通`
+- 环境音目录固定为 `F:\环境音`
+- 需要重新生成 `合成声_2`
+- 数据划分固定为 `3 / 1 / 1`
+- 按 CPU 路线跑通
+
+为了少改配置，仓库已经把 [config/enhancement.yaml](./config/enhancement.yaml) 的默认训练参数调整为：
+
+- `train.batch_size: 2`
+- `train.num_epochs: 3`
+
+下面的步骤按“小白照抄”来写。每一步都包含：
+
+- 要执行的命令
+- 你应该看到什么
+- 失败时怎么判断
+
+### 第 0 步：激活你自己的兼容 Python 虚拟环境
+
+先打开 PowerShell，再进入项目目录：
+
+```powershell
+cd F:\voicefilter
+```
+
+然后执行你自己的 venv 激活命令。这里不写死，是因为每个人路径不一样。激活后立刻检查 Python 版本：
+
+```powershell
+python --version
+```
+
+你应该看到：
+
+- `Python 3.9.x`
+- 或 `Python 3.10.x`
+- 或 `Python 3.11.x`
+
+失败时怎么判断：
+
+- 如果还是 `Python 3.12.x`，先不要继续，说明你还没切到兼容环境。
+- 如果 `python` 命令都找不到，也先不要继续。
+
+接着安装依赖：
+
+```powershell
+pip install -r requirements.txt
+```
+
+你应该看到：
+
+- `Successfully installed ...`
+- 或大部分依赖已经存在，只补装少量包
+
+失败时怎么判断：
+
+- 如果报 `No matching distribution found`，通常是 Python 版本不兼容。
+- 如果报 `torch` 安装失败，也先不要继续，直接把原始报错发出来。
+
+### 第 1 步：扫描 5 个人的数据
+
+```powershell
+python scripts/scan_dataset.py --data-root "F:\五人跑通" --output metadata/subjects.json
+```
+
+你应该看到：
+
+- `Scanned 5 subjects`
+- `Saved to ...\metadata\subjects.json`
+
+产物位置：
+
+- `metadata/subjects.json`
+
+失败时怎么判断：
+
+- 如果不是 `5 subjects`，说明目录结构有缺失，先检查每个被试下面是否都有 `元音/鼾声/info.txt`。
+
+### 第 2 步：生成 3/1/1 的 train / val / test 划分
+
+```powershell
+python scripts/build_subject_splits.py --subjects metadata/subjects.json --output-dir splits --train-count 3 --val-count 1 --test-count 1 --seed 42
+```
+
+你应该看到三行输出，分别对应：
+
+- `train: 3 subjects`
+- `val: 1 subjects`
+- `test: 1 subjects`
+
+产物位置：
+
+- `splits/train_subjects.txt`
+- `splits/val_subjects.txt`
+- `splits/test_subjects.txt`
+
+失败时怎么判断：
+
+- 如果报 `Not enough subjects`，通常是上一步扫描出的有效被试数不够 5。
+
+### 第 3 步：用 `F:\环境音` 重新生成 `合成声_2`
+
+```powershell
+python scripts/synthesize_mixed_snore.py --subjects metadata/subjects.json --noise-root "F:\环境音" --output-subdir 合成声_2 --target-snr-db 8.0 --seed 42 --metadata-path metadata/synthesized_mix_metadata.jsonl --metadata-csv metadata/synthesized_mix_metadata.csv
+```
+
+你应该看到：
+
+- 进度条正常走完
+- 最后输出 `Synthesized ... mixtures for 5 subjects`
+
+产物位置：
+
+- 每个被试目录下的 `合成声_2\*.wav`
+- `metadata/synthesized_mix_metadata.jsonl`
+- `metadata/synthesized_mix_metadata.csv`
+
+失败时怎么判断：
+
+- 如果报 `No wav files were found in noise root`，先检查 `F:\环境音` 下是否还是 `jb.wav/km.wav/qm.wav/ye.wav`
+- 如果报某个被试的 `Clean snore filename does not match ...`，说明该被试的 `鼾声` 文件名不符合仓库约定
+
+### 第 4 步：预处理元音、clean 和 mix
+
+```powershell
+python scripts/preprocess_audio.py --subjects metadata/subjects.json --processed-root processed --sample-rate 16000 --vowel-seconds 1.0 --mix-dir-name 合成声_2 --synthesis-metadata metadata/synthesized_mix_metadata.jsonl --snr-stats-csv metadata/preprocess_snr_stats.csv
+```
+
+你应该看到：
+
+- 进度条正常走完
+- 最后输出 `Processed 5 subjects into ...\processed`
+
+产物位置：
+
+- `processed/vowel/`
+- `processed/clean/`
+- `processed/mix/`
+- `metadata/preprocess_snr_stats.csv`
+
+失败时怎么判断：
+
+- 如果出现少量 `WARNING:`，先不要慌，先看命令有没有完整跑完。
+- 如果命令中途直接报错退出，再把整段报错发出来。
+
+### 第 5 步：生成训练用 manifest
+
+这一步先不做 SNR 过滤，避免 5 人数据被筛空。
+
+```powershell
+python scripts/build_manifests.py --subjects metadata/subjects.json --splits-dir splits --output-dir manifests --processed-root processed --mix-dir-name 合成声_2 --snr-stats-csv metadata/preprocess_snr_stats.csv
+```
+
+你应该看到三行输出，分别对应：
+
+- `train: ... samples`
+- `val: ... samples`
+- `test: ... samples`
+
+产物位置：
+
+- `manifests/enhancement_manifest_train.jsonl`
+- `manifests/enhancement_manifest_val.jsonl`
+- `manifests/enhancement_manifest_test.jsonl`
+
+失败时怎么判断：
+
+- 如果某个 split 显示 `0 samples`，先不要继续训练，先把输出发出来。
+
+### 第 6 步：预计算 5 个被试的元音 embedding
+
+```powershell
+python scripts/precompute_vowel_embeddings.py -c config/enhancement.yaml --subjects metadata/subjects.json --processed-root processed --output-dir processed/embeddings --device cpu
+```
+
+你应该看到：
+
+- 进度条正常走完
+- 最后输出 `Saved 5 embeddings`
+
+产物位置：
+
+- `processed/embeddings/*.npy`
+
+失败时怎么判断：
+
+- 如果报找不到某个 `processed/vowel/...wav`，说明上一步预处理没有完整成功。
+
+### 第 7 步：训练模型
+
+当前仓库默认已经适配这次 5 人 CPU 跑通：
+
+- `batch_size = 2`
+- `num_epochs = 3`
+
+直接运行：
+
+```powershell
+python scripts/train_enhancement.py -c config/enhancement.yaml --device cpu
+```
+
+你应该看到：
+
+- 每个 epoch 的 `train_loss` 和 `val_loss`
+- 训练结束后生成 checkpoint
+
+产物位置：
+
+- `outputs/checkpoints/latest.pt`
+- `outputs/checkpoints/best.pt`
+- `outputs/logs/train.log`
+
+失败时怎么判断：
+
+- 如果报内存不足，可以先把 [config/enhancement.yaml](./config/enhancement.yaml) 中的 `batch_size` 再改成 `1`
+- 如果 `best.pt` 没有生成，不要继续推理和评估
+
+### 第 8 步：做 1 条测试集推理
+
+先自动读取测试被试和该被试的第一条混合音，再直接推理：
+
+```powershell
+$testSubject = Get-Content splits/test_subjects.txt -Encoding UTF8 | Select-Object -First 1
+Write-Output $testSubject
+$mixedFile = Get-ChildItem "processed/mix/$testSubject" -Filter *.wav | Select-Object -First 1 -ExpandProperty FullName
+Write-Output $mixedFile
+python scripts/infer_enhancement_long.py -c config/enhancement.yaml --checkpoint-path outputs/checkpoints/best.pt --mixed-file "$mixedFile" --vowel-dir "processed/vowel/$testSubject" --output-path "outputs/enhanced_wavs/${testSubject}_demo.wav" --device cpu
+```
+
+你应该看到：
+
+- 最后输出 `Saved enhanced wav to ...`
+
+产物位置：
+
+- `outputs/enhanced_wavs/*.wav`
+
+失败时怎么判断：
+
+- 如果报 `outputs/checkpoints/best.pt` 不存在，说明训练还没有成功完成
+- 如果报 `processed/mix/$testSubject` 下没有 wav，说明前面的预处理或 manifest 环节有问题
+- 如果报 `argument --mixed-file: expected one argument`，通常就是 `$mixedFile` 为空，先看上面两行 `Write-Output` 的结果是不是正常
+
+### 第 9 步：跑完整个测试集评估
+
+```powershell
+python scripts/evaluate_enhancement.py -c config/enhancement.yaml --checkpoint-path outputs/checkpoints/best.pt --output-csv outputs/eval/metrics.csv --device cpu
+```
+
+你应该看到：
+
+- 评估进度条正常走完
+- 最后输出 `Saved ... evaluation rows`
+
+产物位置：
+
+- `outputs/eval/metrics.csv`
+- `outputs/eval/enhanced_wavs/*.wav`
+
+失败时怎么判断：
+
+- 如果 `metrics.csv` 没生成，就把整段报错直接发出来
+
+### 最后检查清单
+
+至少确认这些文件或目录存在：
+
+- `metadata/subjects.json`
+- `splits/train_subjects.txt`
+- `splits/val_subjects.txt`
+- `splits/test_subjects.txt`
+- 每个被试目录下的 `合成声_2`
+- `processed/vowel`
+- `processed/clean`
+- `processed/mix`
+- `processed/embeddings`
+- `manifests/enhancement_manifest_train.jsonl`
+- `manifests/enhancement_manifest_val.jsonl`
+- `manifests/enhancement_manifest_test.jsonl`
+- `outputs/checkpoints/best.pt`
+- `outputs/enhanced_wavs`
+- `outputs/eval/metrics.csv`
+
+遇到报错时，直接把原始报错贴出来，不需要你先自己分析。
+
 ## 依赖安装
 
 ```bash
@@ -32,16 +320,23 @@ data_root/
   2022_09_06_张三/
     元音/
       a1_1.wav
-      e1_1.wav
-      i1_1.wav
-      o1_1.wav
-      u1_1.wav
+      e1_3.wav
+      i1_2.wav
+      o1_3.wav
+      u1_2.wav
     鼾声/
       hs_01_1.wav
       ...
       hs_01_10.wav
     info.txt
 ```
+
+说明：
+
+- `元音/` 目录必须能覆盖 `a/e/i/o/u` 这 5 个元音类别。
+- 文件名不要求必须固定为 `a1_1.wav/e1_1.wav/...`。
+- 只要文件名首字母能唯一表示元音即可，例如 `e1_3.wav`、`u1_2.wav` 也可以。
+- 如果同一元音出现多个候选文件，当前脚本会按文件名字典序选择第一个，并打印 warning。
 
 如果已经存在旧版混合音，也可以保留：
 

@@ -11,7 +11,7 @@ from model.embedding_adapter import EmbeddingAdapter
 from model.model import VoiceFilter
 from model.vowel_encoder import VowelEmbeddingEncoder
 from utils.audio import Audio, load_wav, pad_or_trim_wav, peak_normalize, repeat_pad_wav, save_wav
-from utils.dataset_index import VOWEL_FILES, ensure_dir
+from utils.dataset_index import VOWEL_KEYS, discover_vowel_files, ensure_dir
 from utils.hparams import HParam
 
 
@@ -28,9 +28,18 @@ def load_vowel_embedding(hp, device, vowel_dir, embedder_path=None):
         encoder.load_embedder(embedder_path)
     encoder.eval()
 
+    vowel_info = discover_vowel_files(vowel_dir)
+    if vowel_info['missing']:
+        raise FileNotFoundError('Missing vowel files in %s: %s' % (vowel_dir, ', '.join(vowel_info['missing'])))
+    for vowel_key, candidates in sorted(vowel_info['conflicts'].items()):
+        print(
+            'WARNING: multiple vowel candidates in %s for %s, using %s'
+            % (vowel_dir, vowel_key, candidates[0])
+        )
+
     vowel_mels = []
-    for vowel_name in VOWEL_FILES:
-        wav_path = os.path.join(vowel_dir, vowel_name)
+    for vowel_key in VOWEL_KEYS:
+        wav_path = vowel_info['selected'][vowel_key]
         wav, _ = load_wav(wav_path, sample_rate=hp.audio.sample_rate, mono=True)
         wav = peak_normalize(repeat_pad_wav(wav, hp.audio.sample_rate, 1.0))
         mel = torch.from_numpy(audio.get_mel(wav)).float().to(device)
