@@ -8,11 +8,16 @@ config/*
 temp/
 chkpt/
 logs/
-metadata/
-splits/
-manifests/
-processed/
 outputs/
+
+# generated dataset artifacts
+processed/
+manifests/
+splits/
+
+# generated metadata artifacts
+metadata/*.csv
+metadata/*.jsonl
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

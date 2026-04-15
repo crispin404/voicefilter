@@ -1,0 +1,22 @@
+name: voicefilter-py39-cpu
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - pip
+  - cpuonly
+  - pytorch=2.2.2
+  - torchaudio=2.2.2
+  - numpy=1.26.4
+  - scipy=1.11.4
+  - librosa=0.10.2.post1
+  - soundfile=0.12.1
+  - pyyaml=6.0.1
+  - tqdm=4.66.5
+  - matplotlib=3.7.5
+  - pillow=10.2.0
+  - pip:
+      - mir_eval==0.7
+      - tensorboardX==2.6.2.2
