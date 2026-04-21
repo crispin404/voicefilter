@@ -9,6 +9,7 @@ temp/
 chkpt/
 logs/
 outputs/
+pretrained/
 
 # generated dataset artifacts
 processed/

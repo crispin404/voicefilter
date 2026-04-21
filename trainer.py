@@ -4,6 +4,7 @@ import logging
 import argparse
 
 from utils.train import train
+from utils.embedder_checkpoint import DEFAULT_EMBEDDER_PATH, resolve_embedder_path
 from utils.hparams import HParam
 from utils.writer import MyWriter
 from datasets.dataloader import create_dataloader
@@ -15,8 +16,8 @@ if __name__ == '__main__':
                         help="Root directory of run.")
     parser.add_argument('-c', '--config', type=str, required=True,
                         help="yaml file for configuration")
-    parser.add_argument('-e', '--embedder_path', type=str, required=True,
-                        help="path of embedder model pt file")
+    parser.add_argument('-e', '--embedder_path', type=str, default=None,
+                        help="path of embedder model pt file, defaults to %s" % DEFAULT_EMBEDDER_PATH)
     parser.add_argument('--checkpoint_path', type=str, default=None,
                         help="path of checkpoint pt file")
     parser.add_argument('-m', '--model', type=str, required=True,
@@ -24,6 +25,7 @@ if __name__ == '__main__':
     parser.add_argument('--device', type=str, default='auto',
                         help='cpu, cuda, or auto (default)')
     args = parser.parse_args()
+    args.embedder_path = resolve_embedder_path(args.embedder_path)
 
     hp = HParam(args.config)
     with open(args.config, 'r') as f:

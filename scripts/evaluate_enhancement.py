@@ -14,6 +14,7 @@ from model.model import VoiceFilter
 from model.vowel_encoder import VowelEmbeddingEncoder
 from utils.audio import Audio, load_wav, pad_or_trim_wav, peak_normalize, repeat_pad_wav, save_wav
 from utils.dataset_index import VOWEL_FILES, ensure_dir, load_jsonl
+from utils.embedder_checkpoint import DEFAULT_EMBEDDER_PATH, resolve_embedder_path
 from utils.hparams import HParam
 from utils.metrics import sdr, si_sdr, snr_improvement
 
@@ -45,8 +46,7 @@ def load_subject_embedding(item, hp, device, embedder_path=None):
         return torch.from_numpy(np.load(item['embedding_path']).astype(np.float32)).unsqueeze(0).to(device)
 
     encoder = VowelEmbeddingEncoder(hp).to(device)
-    if embedder_path:
-        encoder.load_embedder(embedder_path)
+    encoder.load_embedder(embedder_path)
     encoder.eval()
     audio = Audio(hp)
 
@@ -95,7 +95,7 @@ def main():
     parser.add_argument('-c', '--config', default=os.path.join('config', 'enhancement.yaml'), help='YAML config path')
     parser.add_argument('--checkpoint-path', required=True, help='Trained enhancement checkpoint')
     parser.add_argument('--manifest', default=None, help='Manifest path, defaults to config test manifest')
-    parser.add_argument('--embedder-path', default=None, help='Optional embedder checkpoint')
+    parser.add_argument('--embedder-path', default=None, help='Embedder checkpoint used when embeddings must be computed online, defaults to %s' % DEFAULT_EMBEDDER_PATH)
     parser.add_argument('--output-csv', default=os.path.join('outputs', 'eval', 'metrics.csv'), help='CSV output path')
     parser.add_argument('--save-wavs-dir', default=os.path.join('outputs', 'eval', 'enhanced_wavs'), help='Optional directory for enhanced wavs')
     parser.add_argument('--device', default='auto', help='cpu, cuda, or auto')
@@ -104,6 +104,7 @@ def main():
     hp = HParam(args.config)
     manifest_path = args.manifest or hp.data.manifest_test
     device = build_device(args.device)
+    embedder_path = resolve_embedder_path(args.embedder_path)
     audio = Audio(hp)
 
     checkpoint = torch.load(args.checkpoint_path, map_location=device)
@@ -130,7 +131,7 @@ def main():
         mixed_wav = mixed_wav[:pair_length]
         clean_wav = clean_wav[:pair_length]
 
-        embedding = load_subject_embedding(item, hp, device, embedder_path=args.embedder_path)
+        embedding = load_subject_embedding(item, hp, device, embedder_path=embedder_path)
         enhanced_wav = enhance_wav(model, adapter, audio, hp, device, mixed_wav, embedding)
         enhanced_wav = pad_or_trim_wav(enhanced_wav, pair_length)
 

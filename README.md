@@ -191,6 +191,8 @@ python scripts/build_manifests.py --subjects metadata/subjects.json --splits-dir
 
 ### 第 6 步：预计算 5 个被试的元音 embedding
 
+当前项目默认要求 `pretrained/embedder.pt` 存在。脚本会自动加载它；如果文件不存在，会直接报错停止，避免使用随机初始化的 embedder。
+
 ```powershell
 python scripts/precompute_vowel_embeddings.py -c config/enhancement.yaml --subjects metadata/subjects.json --processed-root processed --output-dir processed/embeddings --device cpu
 ```
@@ -199,6 +201,7 @@ python scripts/precompute_vowel_embeddings.py -c config/enhancement.yaml --subje
 
 - 进度条正常走完
 - 最后输出 `Saved 5 embeddings`
+- 最后输出 `Embedder checkpoint loaded: yes`
 
 产物位置：
 
@@ -207,6 +210,7 @@ python scripts/precompute_vowel_embeddings.py -c config/enhancement.yaml --subje
 失败时怎么判断：
 
 - 如果报找不到某个 `processed/vowel/...wav`，说明上一步预处理没有完整成功。
+- 如果报 `Embedder checkpoint not found`，确认权重文件已经放在 `pretrained/embedder.pt`。
 
 ### 第 7 步：训练模型
 
@@ -288,6 +292,7 @@ python scripts/evaluate_enhancement.py -c config/enhancement.yaml --checkpoint-p
 至少确认这些文件或目录存在：
 
 - `metadata/subjects.json`
+- `pretrained/embedder.pt`
 - `splits/train_subjects.txt`
 - `splits/val_subjects.txt`
 - `splits/test_subjects.txt`
@@ -496,21 +501,23 @@ python scripts/build_manifests.py --subjects metadata/subjects.json --splits-dir
 
 ### 第五步：预计算元音 embedding
 
-若你有原始 speaker embedder 权重，可通过 `--embedder-path` 指定；没有也可以直接运行，脚本会使用随机初始化接口完成流程。
+当前项目默认要求 speaker embedder 权重位于 `pretrained/embedder.pt`。脚本会自动加载该文件；如果文件不存在，会直接报错停止，避免元音条件退回随机初始化。
 
 ```bash
 python scripts/precompute_vowel_embeddings.py -c config/enhancement.yaml --subjects metadata/subjects.json --processed-root processed --output-dir processed/embeddings
 ```
 
-带预训练 embedder 的示例：
+如果需要临时使用其他权重，可以显式覆盖：
 
 ```bash
-python scripts/precompute_vowel_embeddings.py -c config/enhancement.yaml --subjects metadata/subjects.json --processed-root processed --output-dir processed/embeddings --embedder-path path/to/embedder.pt
+python scripts/precompute_vowel_embeddings.py -c config/enhancement.yaml --subjects metadata/subjects.json --processed-root processed --output-dir processed/embeddings --embedder-path other/path/embedder.pt
 ```
 
 输出位置：
 
 - `processed/embeddings/{subject_id}.npy`
+
+如果此前已经用随机初始化 embedder 生成过 `processed/embeddings/*.npy`，放入 `pretrained/embedder.pt` 后需要重新执行本步骤，然后重新训练或微调增强模型。旧的 `outputs/checkpoints/best.pt` 应视为旧 embedding 条件下的产物。
 
 ### 第六步：训练条件增强模型
 
@@ -544,7 +551,7 @@ python scripts/train_enhancement.py -c config/enhancement.yaml --checkpoint-path
 
 输入某个被试的 5 段元音和一条 30 秒混合音，脚本会：
 
-- 先在线计算 5 段元音的聚合 embedding
+- 先使用 `pretrained/embedder.pt` 在线计算 5 段元音的聚合 embedding
 - 再对混合音按 `3s window / 1.5s hop` 滑窗推理
 - 最后 overlap-add 重建整段增强音频
 
@@ -552,10 +559,10 @@ python scripts/train_enhancement.py -c config/enhancement.yaml --checkpoint-path
 python scripts/infer_enhancement_long.py -c config/enhancement.yaml --checkpoint-path outputs/checkpoints/best.pt --mixed-file processed/mix/{subject_id}/hs_01_jb_03.wav --vowel-dir processed/vowel/{subject_id} --output-path outputs/enhanced_wavs/{subject_id}_hs_01_jb_03.wav
 ```
 
-如果需要与训练时一致的 embedder 权重：
+默认权重路径是 `pretrained/embedder.pt`。如果需要临时使用其他权重，可以显式覆盖：
 
 ```bash
-python scripts/infer_enhancement_long.py -c config/enhancement.yaml --checkpoint-path outputs/checkpoints/best.pt --mixed-file processed/mix/{subject_id}/hs_01_jb_03.wav --vowel-dir processed/vowel/{subject_id} --embedder-path path/to/embedder.pt --output-path outputs/enhanced_wavs/{subject_id}_hs_01_jb_03.wav
+python scripts/infer_enhancement_long.py -c config/enhancement.yaml --checkpoint-path outputs/checkpoints/best.pt --mixed-file processed/mix/{subject_id}/hs_01_jb_03.wav --vowel-dir processed/vowel/{subject_id} --embedder-path other/path/embedder.pt --output-path outputs/enhanced_wavs/{subject_id}_hs_01_jb_03.wav
 ```
 
 输出位置：
@@ -570,7 +577,7 @@ python scripts/infer_enhancement_long.py -c config/enhancement.yaml --checkpoint
 python scripts/evaluate_enhancement.py -c config/enhancement.yaml --checkpoint-path outputs/checkpoints/best.pt --output-csv outputs/eval/metrics.csv
 ```
 
-如果 test manifest 没有预计算 embedding，也可以加上 `--embedder-path` 让脚本回退到在线计算。
+评估脚本默认校验 `pretrained/embedder.pt`。如果 test manifest 没有预计算 embedding，会用该权重在线计算；不会回退到随机初始化。
 
 输出位置：
 

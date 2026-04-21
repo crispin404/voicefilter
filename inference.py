@@ -4,6 +4,7 @@ import torch
 import argparse
 
 from utils.audio import Audio, load_wav, save_wav
+from utils.embedder_checkpoint import DEFAULT_EMBEDDER_PATH, resolve_embedder_path
 from utils.hparams import HParam
 from model.model import VoiceFilter
 from model.embedder import SpeechEmbedder
@@ -55,8 +56,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--config', type=str, required=True,
                         help="yaml file for configuration")
-    parser.add_argument('-e', '--embedder_path', type=str, required=True,
-                        help="path of embedder model pt file")
+    parser.add_argument('-e', '--embedder_path', type=str, default=None,
+                        help="path of embedder model pt file, defaults to %s" % DEFAULT_EMBEDDER_PATH)
     parser.add_argument('--checkpoint_path', type=str, default=None,
                         help="path of checkpoint pt file")
     parser.add_argument('-m', '--mixed_file', type=str, required=True,
@@ -69,6 +70,7 @@ if __name__ == '__main__':
                         help='cpu, cuda, or auto (default)')
 
     args = parser.parse_args()
+    args.embedder_path = resolve_embedder_path(args.embedder_path)
 
     hp = HParam(args.config)
 

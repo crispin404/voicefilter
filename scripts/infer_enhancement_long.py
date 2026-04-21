@@ -12,6 +12,7 @@ from model.model import VoiceFilter
 from model.vowel_encoder import VowelEmbeddingEncoder
 from utils.audio import Audio, load_wav, pad_or_trim_wav, peak_normalize, repeat_pad_wav, save_wav
 from utils.dataset_index import VOWEL_KEYS, discover_vowel_files, ensure_dir
+from utils.embedder_checkpoint import DEFAULT_EMBEDDER_PATH, resolve_embedder_path
 from utils.hparams import HParam
 
 
@@ -24,8 +25,7 @@ def build_device(device_name):
 def load_vowel_embedding(hp, device, vowel_dir, embedder_path=None):
     audio = Audio(hp)
     encoder = VowelEmbeddingEncoder(hp).to(device)
-    if embedder_path:
-        encoder.load_embedder(embedder_path)
+    encoder.load_embedder(resolve_embedder_path(embedder_path))
     encoder.eval()
 
     vowel_info = discover_vowel_files(vowel_dir)
@@ -75,13 +75,14 @@ def main():
     parser.add_argument('--checkpoint-path', required=True, help='Trained enhancement checkpoint')
     parser.add_argument('--mixed-file', required=True, help='Path to the 30-second mixed wav')
     parser.add_argument('--vowel-dir', required=True, help='Directory containing 5 vowel wavs')
-    parser.add_argument('--embedder-path', default=None, help='Optional embedder checkpoint used for vowel encoding')
+    parser.add_argument('--embedder-path', default=None, help='Embedder checkpoint used for vowel encoding, defaults to %s' % DEFAULT_EMBEDDER_PATH)
     parser.add_argument('--output-path', required=True, help='Output enhanced wav path')
     parser.add_argument('--device', default='auto', help='cpu, cuda, or auto')
     args = parser.parse_args()
 
     hp = HParam(args.config)
     device = build_device(args.device)
+    embedder_path = resolve_embedder_path(args.embedder_path)
     audio = Audio(hp)
 
     checkpoint = torch.load(args.checkpoint_path, map_location=device)
@@ -94,7 +95,7 @@ def main():
         adapter.load_state_dict(checkpoint['adapter'])
         adapter.eval()
 
-    embedding = load_vowel_embedding(hp, device, args.vowel_dir, embedder_path=args.embedder_path)
+    embedding = load_vowel_embedding(hp, device, args.vowel_dir, embedder_path=embedder_path)
     if adapter is not None:
         with torch.no_grad():
             embedding = adapter(embedding)

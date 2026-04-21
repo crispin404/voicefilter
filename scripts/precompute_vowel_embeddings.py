@@ -11,6 +11,7 @@ from tqdm import tqdm
 from model.vowel_encoder import VowelEmbeddingEncoder
 from utils.audio import Audio, load_wav
 from utils.dataset_index import VOWEL_FILES, ensure_dir, load_subjects
+from utils.embedder_checkpoint import DEFAULT_EMBEDDER_PATH, resolve_embedder_path
 from utils.hparams import HParam
 
 
@@ -37,18 +38,19 @@ def main():
     parser.add_argument('-c', '--config', required=True, help='YAML config path')
     parser.add_argument('--subjects', default=os.path.join('metadata', 'subjects.json'), help='subjects.json path')
     parser.add_argument('--processed-root', default='processed', help='Processed root containing vowel wavs')
-    parser.add_argument('--embedder-path', default=None, help='Optional pre-trained embedder weights')
+    parser.add_argument('--embedder-path', default=None, help='Pre-trained embedder weights, defaults to %s' % DEFAULT_EMBEDDER_PATH)
     parser.add_argument('--output-dir', default=os.path.join('processed', 'embeddings'), help='Output directory for .npy embeddings')
     parser.add_argument('--device', default='auto', help='cpu, cuda, or auto')
     args = parser.parse_args()
 
     hp = HParam(args.config)
     device = build_device(args.device)
+    embedder_path = resolve_embedder_path(args.embedder_path)
     subjects = load_subjects(args.subjects)
     audio = Audio(hp)
 
     encoder = VowelEmbeddingEncoder(hp)
-    loaded = encoder.load_embedder(args.embedder_path) if args.embedder_path else False
+    loaded = encoder.load_embedder(embedder_path)
     encoder.eval()
     encoder.to(device)
 
