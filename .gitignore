@@ -1,8 +1,8 @@
 .idea/
 # configuration yaml files
 config/*
-!config/default.yaml
 !config/enhancement.yaml
+!config/platform_gpu.yaml
 
 
 temp/
@@ -10,6 +10,9 @@ chkpt/
 logs/
 outputs/
 pretrained/
+
+# local/raw datasets
+data/
 
 # generated dataset artifacts
 processed/

@@ -21,9 +21,12 @@ from utils.dataset_index import (
     SNORE_PATTERN,
     ensure_dir,
     list_wavs_if_dir,
+    load_jsonl,
     load_subject_ids,
     load_subjects,
     normalize_path,
+    parse_mix_filename,
+    safe_float,
     save_jsonl,
     strip_wav_extension,
     write_csv,
@@ -31,16 +34,17 @@ from utils.dataset_index import (
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Synthesize snore+noise mixtures with a fixed target SNR.')
+    parser = argparse.ArgumentParser(description='Incrementally synthesize snore+noise mixtures with a fixed target SNR.')
     parser.add_argument('--subjects', default=os.path.join('metadata', 'subjects.json'), help='subjects.json path')
     parser.add_argument('--subject-ids-file', default=None, help='Optional text file with one subject_id per line')
     parser.add_argument('--subject-id', action='append', default=None, help='Optional subject_id filter, can be repeated')
     parser.add_argument('--noise-root', required=True, help='Directory containing flat noise wav files')
-    parser.add_argument('--output-subdir', default='合成声_2', help='Per-subject output subdirectory for synthesized mixtures')
+    parser.add_argument('--output-subdir', default='合成声', help='Per-subject output subdirectory for synthesized mixtures')
     parser.add_argument('--sample-rate', type=int, default=16000, help='Target sample rate')
     parser.add_argument('--target-snr-db', type=float, default=8.0, help='Target clean-over-noise SNR in dB')
     parser.add_argument('--peak-limit', type=float, default=0.99, help='Max allowed absolute peak after mixing')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
+    parser.add_argument('--force', action='store_true', help='Re-synthesize all expected mixtures even when outputs are up to date')
     parser.add_argument(
         '--metadata-path',
         default=os.path.join('metadata', 'synthesized_mix_metadata.jsonl'),
@@ -79,6 +83,59 @@ def build_output_filename(clean_path, noise_type):
     return 'hs_%s_%s_%02d.wav' % (inner_id_raw, noise_type, snore_index)
 
 
+def metadata_key(subject_id, output_filename):
+    return subject_id, output_filename
+
+
+def load_existing_metadata(path):
+    if not path or not os.path.isfile(path):
+        return {}
+    return {
+        metadata_key(row.get('subject_id'), os.path.basename(row.get('output_mix_file', ''))): row
+        for row in load_jsonl(path)
+        if row.get('subject_id') and row.get('output_mix_file')
+    }
+
+
+def is_output_up_to_date(output_path, source_paths):
+    if not os.path.isfile(output_path):
+        return False
+    output_mtime = os.path.getmtime(output_path)
+    return all(os.path.isfile(path) and output_mtime >= os.path.getmtime(path) for path in source_paths)
+
+
+def row_matches_current_run(row, sample_rate, target_snr_db):
+    if not row:
+        return False
+    row_sample_rate = safe_float(row.get('sample_rate'))
+    row_target_snr = safe_float(row.get('target_snr_db'))
+    return row_sample_rate == float(sample_rate) and row_target_snr == float(target_snr_db)
+
+
+def normalize_metadata_row(row, subject_id, clean_path, noise_path, output_path, target_snr_db, sample_rate):
+    updated = dict(row)
+    updated['subject_id'] = subject_id
+    updated['clean_file'] = normalize_path(clean_path)
+    updated['noise_file'] = normalize_path(noise_path)
+    updated['noise_type'] = strip_wav_extension(noise_path)
+    updated['output_mix_file'] = normalize_path(output_path)
+    updated['target_snr_db'] = float(target_snr_db)
+    updated['sample_rate'] = int(sample_rate)
+    return updated
+
+
+def remove_stale_mix_files(output_dir, expected_filenames):
+    removed = 0
+    for path in list_wavs_if_dir(output_dir):
+        basename = os.path.basename(path)
+        if parse_mix_filename(path) is None:
+            continue
+        if basename not in expected_filenames:
+            os.remove(path)
+            removed += 1
+    return removed
+
+
 def synthesize_pair(clean_path, noise_path, output_path, sample_rate, target_snr_db, peak_limit, rng):
     clean_wav, _ = load_wav(clean_path, sample_rate=sample_rate, mono=True)
     noise_wav, _ = load_wav(noise_path, sample_rate=sample_rate, mono=True)
@@ -112,7 +169,7 @@ def synthesize_pair(clean_path, noise_path, output_path, sample_rate, target_snr
     }
 
 
-def synthesize_subject(subject, noise_paths, output_subdir, sample_rate, target_snr_db, peak_limit, rng):
+def synthesize_subject(subject, noise_paths, output_subdir, sample_rate, target_snr_db, peak_limit, rng, metadata_lookup, force=False):
     clean_paths = subject.get('snore_paths') or [normalize_path(path) for path in list_wavs_if_dir(subject['snore_dir'])]
     if not clean_paths:
         raise FileNotFoundError('No clean snore wav files found for subject %s' % subject['subject_id'])
@@ -120,7 +177,15 @@ def synthesize_subject(subject, noise_paths, output_subdir, sample_rate, target_
     output_dir = os.path.join(subject['subject_dir'], output_subdir)
     ensure_dir(output_dir)
 
+    expected_filenames = set()
+    for clean_path in clean_paths:
+        for noise_path in noise_paths:
+            expected_filenames.add(build_output_filename(clean_path, strip_wav_extension(noise_path)))
+    removed = remove_stale_mix_files(output_dir, expected_filenames)
+
     rows = []
+    synthesized = 0
+    skipped = 0
     for clean_path in clean_paths:
         clean_name = os.path.basename(clean_path)
         if SNORE_PATTERN.match(clean_name) is None:
@@ -130,6 +195,27 @@ def synthesize_subject(subject, noise_paths, output_subdir, sample_rate, target_
             noise_type = strip_wav_extension(noise_path)
             output_filename = build_output_filename(clean_path, noise_type)
             output_path = os.path.join(output_dir, output_filename)
+            existing_row = metadata_lookup.get(metadata_key(subject['subject_id'], output_filename))
+            up_to_date = (
+                not force
+                and is_output_up_to_date(output_path, [clean_path, noise_path])
+                and row_matches_current_run(existing_row, sample_rate, target_snr_db)
+            )
+
+            if up_to_date:
+                rows.append(
+                    normalize_metadata_row(
+                        existing_row,
+                        subject['subject_id'],
+                        clean_path,
+                        noise_path,
+                        output_path,
+                        target_snr_db,
+                        sample_rate,
+                    )
+                )
+                skipped += 1
+                continue
 
             try:
                 pair_meta = synthesize_pair(
@@ -162,7 +248,9 @@ def synthesize_subject(subject, noise_paths, output_subdir, sample_rate, target_
                 'peak_before_scale': pair_meta['peak_before_scale'],
                 'peak_after_scale': pair_meta['peak_after_scale'],
             })
-    return rows
+            synthesized += 1
+
+    return rows, {'synthesized': synthesized, 'skipped': skipped, 'removed': removed}
 
 
 def main():
@@ -175,20 +263,25 @@ def main():
         raise ValueError('No subjects were selected.')
 
     noise_paths = list_noise_files(args.noise_root)
+    metadata_lookup = load_existing_metadata(args.metadata_path)
 
     metadata_rows = []
+    totals = {'synthesized': 0, 'skipped': 0, 'removed': 0}
     for subject in tqdm(selected_subjects, desc='synthesize'):
-        metadata_rows.extend(
-            synthesize_subject(
-                subject=subject,
-                noise_paths=noise_paths,
-                output_subdir=args.output_subdir,
-                sample_rate=args.sample_rate,
-                target_snr_db=args.target_snr_db,
-                peak_limit=args.peak_limit,
-                rng=rng,
-            )
+        rows, counts = synthesize_subject(
+            subject=subject,
+            noise_paths=noise_paths,
+            output_subdir=args.output_subdir,
+            sample_rate=args.sample_rate,
+            target_snr_db=args.target_snr_db,
+            peak_limit=args.peak_limit,
+            rng=rng,
+            metadata_lookup=metadata_lookup,
+            force=args.force,
         )
+        metadata_rows.extend(rows)
+        for key, value in counts.items():
+            totals[key] += value
 
     save_jsonl(metadata_rows, args.metadata_path)
     if args.metadata_csv:
@@ -212,7 +305,12 @@ def main():
             ],
         )
 
-    print('Synthesized %d mixtures for %d subjects.' % (len(metadata_rows), len(selected_subjects)))
+    print('Current mixture rows: %d for %d subjects.' % (len(metadata_rows), len(selected_subjects)))
+    print('synthesized=%d skipped=%d removed_stale=%d' % (
+        totals['synthesized'],
+        totals['skipped'],
+        totals['removed'],
+    ))
     print('JSONL metadata: %s' % os.path.abspath(args.metadata_path))
     if args.metadata_csv:
         print('CSV metadata: %s' % os.path.abspath(args.metadata_csv))

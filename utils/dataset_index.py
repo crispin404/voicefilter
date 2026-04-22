@@ -9,7 +9,7 @@ from glob import glob
 REQUIRED_DIRS = {
     'vowel_dir': '元音',
     'snore_dir': '鼾声',
-    'mix_dir': '合成声_1',
+    'mix_dir': '合成声',
 }
 OPTIONAL_DIR_KEYS = {'mix_dir'}
 
@@ -23,7 +23,7 @@ VOWEL_CANONICAL_FILENAMES = {
 }
 VOWEL_FILES = [VOWEL_CANONICAL_FILENAMES[key] for key in VOWEL_KEYS]
 SNORE_PATTERN = re.compile(r'^hs_(\d+)_([0-9]+)\.wav$', re.IGNORECASE)
-MIX_PATTERN = re.compile(r'^hs_(\d+)_([a-zA-Z]+)_([0-9]+)\.wav$', re.IGNORECASE)
+MIX_PATTERN = re.compile(r'^hs_(\d+)_(.+)_([0-9]+)\.wav$', re.IGNORECASE)
 
 INFO_FIELD_PATTERNS = {
     'name': [r'姓名[:：]?\s*(.+)'],

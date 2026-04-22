@@ -119,6 +119,12 @@ def main():
     )
     logger = logging.getLogger('train_enhancement')
     writer = SummaryWriter(log_dir)
+    logger.info('Using device: %s', device)
+    logger.info('Torch version: %s', torch.__version__)
+    if device.type == 'cuda':
+        logger.info('CUDA available: %s', torch.cuda.is_available())
+        logger.info('CUDA device count: %d', torch.cuda.device_count())
+        logger.info('CUDA device name: %s', torch.cuda.get_device_name(device))
 
     train_dataset = EnhancementDataset(hp.data.manifest_train, hp, train=True)
     val_dataset = EnhancementDataset(hp.data.manifest_val, hp, train=False)

@@ -22,7 +22,7 @@ def parse_args():
     parser.add_argument('--splits-dir', default='splits', help='Directory containing *_subjects.txt')
     parser.add_argument('--output-dir', default='manifests', help='Directory for output jsonl files')
     parser.add_argument('--processed-root', default=None, help='Optional processed root used to resolve audio and embedding paths')
-    parser.add_argument('--mix-dir-name', default=None, help='Optional raw mix subdirectory name, e.g. 合成声_2')
+    parser.add_argument('--mix-dir-name', default=None, help='Optional raw mix subdirectory name, e.g. 合成声')
     parser.add_argument('--min-snr-db', type=float, default=None, help='Optional lower bound for actual_snr_db filtering')
     parser.add_argument('--max-snr-db', type=float, default=None, help='Optional upper bound for actual_snr_db filtering')
     parser.add_argument('--snr-stats-csv', default=None, help='Optional CSV or JSONL exported by preprocess_audio.py')

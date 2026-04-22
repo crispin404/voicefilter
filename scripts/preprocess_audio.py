@@ -33,13 +33,14 @@ from utils.dataset_index import (
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Preprocess vowel, clean snore, and mix audio with pair-wise normalization.')
+    parser = argparse.ArgumentParser(description='Incrementally preprocess vowel, clean snore, and mix audio.')
     parser.add_argument('--subjects', default=os.path.join('metadata', 'subjects.json'), help='subjects.json path')
     parser.add_argument('--processed-root', default='processed', help='Processed output root')
     parser.add_argument('--sample-rate', type=int, default=16000, help='Target sample rate')
     parser.add_argument('--vowel-seconds', type=float, default=1.0, help='Target vowel duration after repeat-padding')
     parser.add_argument('--pair-peak', type=float, default=0.95, help='Peak target used for pair-wise clean/mix normalization')
-    parser.add_argument('--mix-dir-name', default=None, help='Optional raw mix subdirectory name, e.g. 合成声_2')
+    parser.add_argument('--mix-dir-name', default='合成声', help='Raw mix subdirectory name, e.g. 合成声')
+    parser.add_argument('--force', action='store_true', help='Reprocess all expected outputs even when they are up to date')
     parser.add_argument(
         '--synthesis-metadata',
         default=None,
@@ -54,7 +55,7 @@ def parse_args():
 
 
 def load_metadata_lookup(path):
-    if not path:
+    if not path or not os.path.isfile(path):
         return {}
     if path.lower().endswith('.jsonl'):
         rows = load_jsonl(path)
@@ -83,6 +84,40 @@ def resolve_pair_metadata(lookup, subject_id, mix_path):
     if item is not None:
         return item
     return lookup.get(normalize_path(mix_path))
+
+
+def output_up_to_date(output_paths, source_paths):
+    if any(not os.path.isfile(path) for path in output_paths):
+        return False
+    output_mtime = min(os.path.getmtime(path) for path in output_paths)
+    return all(os.path.isfile(path) and output_mtime >= os.path.getmtime(path) for path in source_paths)
+
+
+def stats_match_metadata(stats_row, pair_metadata):
+    if not stats_row:
+        return False
+    if not pair_metadata:
+        return True
+    expected_target = safe_float(pair_metadata.get('target_snr_db'))
+    expected_pair_scale = safe_float(pair_metadata.get('pair_scale'))
+    current_target = safe_float(stats_row.get('target_snr_db'))
+    current_pair_scale = safe_float(stats_row.get('synthesis_pair_scale'))
+    if expected_target is not None and current_target != expected_target:
+        return False
+    if expected_pair_scale is not None and current_pair_scale != expected_pair_scale:
+        return False
+    return True
+
+
+def normalize_stats_row(row, subject_id, clean_path, mix_path, dst_clean_path, dst_mix_path, mix_meta):
+    updated = dict(row)
+    updated['subject_id'] = subject_id
+    updated['clean_file'] = normalize_path(clean_path)
+    updated['mix_file'] = normalize_path(mix_path)
+    updated['noise_type'] = mix_meta['noise_type']
+    updated['output_clean_file'] = normalize_path(dst_clean_path)
+    updated['output_mix_file'] = normalize_path(dst_mix_path)
+    return updated
 
 
 def preprocess_pair(clean_path, mix_path, dst_clean_path, dst_mix_path, sample_rate, pair_peak, pair_metadata=None):
@@ -136,9 +171,32 @@ def preprocess_pair(clean_path, mix_path, dst_clean_path, dst_mix_path, sample_r
     }
 
 
-def preprocess_subject(subject, processed_root, sample_rate, vowel_seconds, pair_peak, mix_dir_name, metadata_lookup):
+def remove_stale_processed_files(mix_out_dir, clean_out_dir, expected_mix_filenames, expected_clean_filenames):
+    removed = 0
+    for path in list_subject_processed_wavs(mix_out_dir):
+        if os.path.basename(path) not in expected_mix_filenames:
+            os.remove(path)
+            removed += 1
+    for path in list_subject_processed_wavs(clean_out_dir):
+        if os.path.basename(path) not in expected_clean_filenames:
+            os.remove(path)
+            removed += 1
+    return removed
+
+
+def list_subject_processed_wavs(path):
+    if not os.path.isdir(path):
+        return []
+    return [
+        os.path.join(path, name)
+        for name in os.listdir(path)
+        if name.lower().endswith('.wav') and os.path.isfile(os.path.join(path, name))
+    ]
+
+
+def preprocess_subject(subject, processed_root, sample_rate, vowel_seconds, pair_peak, mix_dir_name, metadata_lookup, stats_lookup, force=False):
     subject_id = subject['subject_id']
-    counts = {'vowel': 0, 'clean': 0, 'mix': 0}
+    counts = {'vowel': 0, 'vowel_skipped': 0, 'clean': 0, 'mix': 0, 'skipped': 0, 'removed': 0}
     snr_rows = []
 
     vowel_out_dir = os.path.join(processed_root, 'vowel', subject_id)
@@ -153,6 +211,9 @@ def preprocess_subject(subject, processed_root, sample_rate, vowel_seconds, pair
         if not src_path or not os.path.isfile(src_path):
             warn('subject=%s missing vowel=%s' % (subject_id, vowel_key))
             continue
+        if not force and output_up_to_date([dst_path], [src_path]):
+            counts['vowel_skipped'] += 1
+            continue
         preprocess_vowel_file(src_path, dst_path, sample_rate=sample_rate, repeat_seconds=vowel_seconds)
         counts['vowel'] += 1
 
@@ -165,6 +226,9 @@ def preprocess_subject(subject, processed_root, sample_rate, vowel_seconds, pair
 
     mix_paths = list_subject_mix_paths(subject, mix_dir_name=mix_dir_name)
     clean_index = build_clean_index(subject['snore_dir'])
+    expected_mix_filenames = set()
+    expected_clean_filenames = set()
+    valid_pairs = []
 
     for mix_path in mix_paths:
         mix_meta = parse_mix_filename(mix_path)
@@ -180,7 +244,42 @@ def preprocess_subject(subject, processed_root, sample_rate, vowel_seconds, pair
         mix_stem = os.path.splitext(os.path.basename(mix_path))[0]
         dst_clean_path = os.path.join(clean_out_dir, '%s_clean.wav' % mix_stem)
         dst_mix_path = os.path.join(mix_out_dir, os.path.basename(mix_path))
+        expected_mix_filenames.add(os.path.basename(dst_mix_path))
+        expected_clean_filenames.add(os.path.basename(dst_clean_path))
+        valid_pairs.append((mix_path, mix_meta, clean_path, dst_clean_path, dst_mix_path))
+
+    counts['removed'] += remove_stale_processed_files(
+        mix_out_dir,
+        clean_out_dir,
+        expected_mix_filenames,
+        expected_clean_filenames,
+    )
+
+    for mix_path, mix_meta, clean_path, dst_clean_path, dst_mix_path in valid_pairs:
         pair_metadata = resolve_pair_metadata(metadata_lookup, subject_id, mix_path)
+        previous_stats = resolve_pair_metadata(stats_lookup, subject_id, mix_path)
+        if previous_stats is None:
+            previous_stats = resolve_pair_metadata(stats_lookup, subject_id, dst_mix_path)
+
+        can_skip = (
+            not force
+            and output_up_to_date([dst_clean_path, dst_mix_path], [clean_path, mix_path])
+            and stats_match_metadata(previous_stats, pair_metadata)
+        )
+        if can_skip:
+            snr_rows.append(
+                normalize_stats_row(
+                    previous_stats,
+                    subject_id,
+                    clean_path,
+                    mix_path,
+                    dst_clean_path,
+                    dst_mix_path,
+                    mix_meta,
+                )
+            )
+            counts['skipped'] += 1
+            continue
 
         try:
             pair_stats = preprocess_pair(
@@ -225,8 +324,9 @@ def main():
     args = parse_args()
 
     metadata_lookup = load_metadata_lookup(args.synthesis_metadata)
+    stats_lookup = load_metadata_lookup(args.snr_stats_csv)
     subjects = load_subjects(args.subjects)
-    totals = {'vowel': 0, 'clean': 0, 'mix': 0}
+    totals = {'vowel': 0, 'vowel_skipped': 0, 'clean': 0, 'mix': 0, 'skipped': 0, 'removed': 0}
     all_snr_rows = []
 
     for subject in tqdm(subjects, desc='preprocess'):
@@ -238,6 +338,8 @@ def main():
             pair_peak=args.pair_peak,
             mix_dir_name=args.mix_dir_name,
             metadata_lookup=metadata_lookup,
+            stats_lookup=stats_lookup,
+            force=args.force,
         )
         for key, value in counts.items():
             totals[key] += value
@@ -263,7 +365,17 @@ def main():
     )
 
     print('Processed %d subjects into %s' % (len(subjects), os.path.abspath(args.processed_root)))
-    print('vowel=%d clean=%d mix=%d' % (totals['vowel'], totals['clean'], totals['mix']))
+    print(
+        'vowel=%d vowel_skipped=%d clean=%d mix=%d pair_skipped=%d removed_stale=%d'
+        % (
+            totals['vowel'],
+            totals['vowel_skipped'],
+            totals['clean'],
+            totals['mix'],
+            totals['skipped'],
+            totals['removed'],
+        )
+    )
     print('SNR stats CSV: %s' % os.path.abspath(args.snr_stats_csv))
 
 
