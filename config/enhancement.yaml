@@ -14,6 +14,7 @@ model:
   lstm_dim: 400
   fc1_dim: 600
   fc2_dim: 601
+  use_d_vector: true
   use_embedding_adapter: true
   adapter_hidden_dim: 256
 ---
@@ -29,6 +30,7 @@ embedder:
 data:
   data_root: data/raw
   processed_root: processed
+  vowel_embedding_mode: avg
   manifest_train: manifests/enhancement_manifest_train.jsonl
   manifest_val: manifests/enhancement_manifest_val.jsonl
   manifest_test: manifests/enhancement_manifest_test.jsonl
@@ -41,5 +43,6 @@ train:
   num_workers: 0
   learning_rate: 0.0005
   num_epochs: 3
+  enable_best_metric_eval: true
   seed: 42
   save_dir: outputs

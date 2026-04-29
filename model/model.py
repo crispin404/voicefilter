@@ -3,9 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class VoiceFilter(nn.Module):
+class SnoreFilter(nn.Module):
     def __init__(self, hp):
-        super(VoiceFilter, self).__init__()
+        super().__init__()
         self.hp = hp
         assert hp.audio.n_fft // 2 + 1 == hp.audio.num_freq == hp.model.fc2_dim, \
             "stft-related dimension mismatch"

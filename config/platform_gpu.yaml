@@ -14,6 +14,7 @@ model:
   lstm_dim: 400
   fc1_dim: 600
   fc2_dim: 601
+  use_d_vector: true
   use_embedding_adapter: true
   adapter_hidden_dim: 256
 ---
@@ -29,17 +30,34 @@ embedder:
 data:
   data_root: data/raw
   processed_root: processed
+  vowel_embedding_mode: avg
   manifest_train: manifests/enhancement_manifest_train.jsonl
   manifest_val: manifests/enhancement_manifest_val.jsonl
   manifest_test: manifests/enhancement_manifest_test.jsonl
-  segment_seconds: 3.0
-  inference_window_seconds: 3.0
-  inference_hop_seconds: 1.5
+  segment_seconds: 5.0
+  inference_window_seconds: 5.0
+  inference_hop_seconds: 2.5
+  active_crop_enabled: false
+  active_crop_probability: 0.4
+  active_crop_trials: 12
+  active_crop_min_rms: 0.0001
+  active_crop_relative_rms: 0.5
 ---
 train:
-  batch_size: 8
-  num_workers: 4
+  batch_size: 12
+  num_workers: 6
   learning_rate: 0.0005
   num_epochs: 30
+  optimizer: adamw
+  weight_decay: 0.00001
+  grad_clip_norm: 5.0
+  scheduler: reduce_on_plateau
+  lr_factor: 0.5
+  lr_patience: 3
+  min_learning_rate: 0.00002
+  early_stop_patience: 7
+  enable_best_metric_eval: false
+  loss_type: mag_l1_plus_mask_l1
+  mask_loss_weight: 0.1
   seed: 42
   save_dir: outputs/platformax

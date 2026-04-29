@@ -22,6 +22,7 @@ VOWEL_CANONICAL_FILENAMES = {
     'u': 'u1_1.wav',
 }
 VOWEL_FILES = [VOWEL_CANONICAL_FILENAMES[key] for key in VOWEL_KEYS]
+VALID_VOWEL_EMBEDDING_MODES = ['avg'] + VOWEL_KEYS
 SNORE_PATTERN = re.compile(r'^hs_(\d+)_([0-9]+)\.wav$', re.IGNORECASE)
 MIX_PATTERN = re.compile(r'^hs_(\d+)_(.+)_([0-9]+)\.wav$', re.IGNORECASE)
 
@@ -120,6 +121,23 @@ def get_subject_vowel_map(subject):
 def iter_subject_vowel_items(subject):
     mapping = get_subject_vowel_map(subject)
     return [(key, mapping.get(key, '')) for key in VOWEL_KEYS]
+
+
+def normalize_vowel_embedding_mode(mode):
+    normalized = str(mode or 'avg').strip().lower()
+    if normalized not in VALID_VOWEL_EMBEDDING_MODES:
+        raise ValueError(
+            'Unsupported vowel_embedding_mode: %s (expected one of: %s)'
+            % (mode, ', '.join(VALID_VOWEL_EMBEDDING_MODES))
+        )
+    return normalized
+
+
+def get_vowel_embedding_keys(mode):
+    normalized = normalize_vowel_embedding_mode(mode)
+    if normalized == 'avg':
+        return list(VOWEL_KEYS)
+    return [normalized]
 
 
 def resolve_subject_vowel_paths(subject, processed_root=None):
@@ -343,7 +361,7 @@ def parse_mix_filename(path):
     }
 
 
-def build_manifest_rows(subjects, subject_ids, processed_root=None, mix_dir_name=None, snr_lookup=None):
+def build_manifest_rows(subjects, subject_ids, processed_root=None, mix_dir_name=None, snr_lookup=None, vowel_embedding_mode='avg'):
     subject_id_set = set(subject_ids)
     selected = [subject for subject in subjects if subject['subject_id'] in subject_id_set]
     rows = []
@@ -354,12 +372,13 @@ def build_manifest_rows(subjects, subject_ids, processed_root=None, mix_dir_name
                 processed_root=processed_root,
                 mix_dir_name=mix_dir_name,
                 snr_lookup=snr_lookup,
+                vowel_embedding_mode=vowel_embedding_mode,
             )
         )
     return rows
 
 
-def build_subject_manifest_rows(subject, processed_root=None, mix_dir_name=None, snr_lookup=None):
+def build_subject_manifest_rows(subject, processed_root=None, mix_dir_name=None, snr_lookup=None, vowel_embedding_mode='avg'):
     raw_snore_dir = subject['snore_dir']
     raw_mix_dir = subject_mix_dir(subject, mix_dir_name=mix_dir_name)
 
@@ -388,7 +407,7 @@ def build_subject_manifest_rows(subject, processed_root=None, mix_dir_name=None,
             'noise_type': mix_meta['noise_type'],
             'snore_index': mix_meta['snore_index'],
             'vowel_paths': resolve_subject_vowel_paths(subject, processed_root=processed_root),
-            'embedding_path': normalize_path(resolve_embedding_path(subject['subject_id'], processed_root)),
+            'embedding_path': normalize_path(resolve_embedding_path(subject['subject_id'], processed_root, vowel_embedding_mode=vowel_embedding_mode)),
             'info_path': normalize_path(subject['info_path']),
         }
         if snr_meta:
@@ -453,7 +472,16 @@ def extract_snr_fields(row):
     return result
 
 
-def resolve_embedding_path(subject_id, processed_root):
+def resolve_embedding_dir(processed_root=None, vowel_embedding_mode='avg'):
+    normalized = normalize_vowel_embedding_mode(vowel_embedding_mode)
+    dirname = 'embeddings' if normalized == 'avg' else 'embeddings_%s' % normalized
     if processed_root is None:
-        return os.path.join('processed', 'embeddings', '%s.npy' % subject_id)
-    return os.path.join(processed_root, 'embeddings', '%s.npy' % subject_id)
+        return os.path.join('processed', dirname)
+    return os.path.join(processed_root, dirname)
+
+
+def resolve_embedding_path(subject_id, processed_root=None, vowel_embedding_mode='avg'):
+    return os.path.join(
+        resolve_embedding_dir(processed_root, vowel_embedding_mode=vowel_embedding_mode),
+        '%s.npy' % subject_id,
+    )

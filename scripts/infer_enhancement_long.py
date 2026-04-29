@@ -8,10 +8,16 @@ import numpy as np
 import torch
 
 from model.embedding_adapter import EmbeddingAdapter
-from model.model import VoiceFilter
+from model.model import SnoreFilter
 from model.vowel_encoder import VowelEmbeddingEncoder
 from utils.audio import Audio, load_wav, pad_or_trim_wav, peak_normalize, repeat_pad_wav, save_wav
-from utils.dataset_index import VOWEL_KEYS, discover_vowel_files, ensure_dir
+from utils.dataset_index import (
+    discover_vowel_files,
+    ensure_dir,
+    get_vowel_embedding_keys,
+    normalize_vowel_embedding_mode,
+)
+from utils.dvector import use_d_vector, zero_embedding
 from utils.embedder_checkpoint import DEFAULT_EMBEDDER_PATH, resolve_embedder_path
 from utils.hparams import HParam
 
@@ -27,21 +33,29 @@ def load_vowel_embedding(hp, device, vowel_dir, embedder_path=None):
     encoder = VowelEmbeddingEncoder(hp).to(device)
     encoder.load_embedder(resolve_embedder_path(embedder_path))
     encoder.eval()
+    vowel_embedding_mode = normalize_vowel_embedding_mode(hp.data.get('vowel_embedding_mode', 'avg'))
+    vowel_keys = get_vowel_embedding_keys(vowel_embedding_mode)
 
     vowel_info = discover_vowel_files(vowel_dir)
-    if vowel_info['missing']:
-        raise FileNotFoundError('Missing vowel files in %s: %s' % (vowel_dir, ', '.join(vowel_info['missing'])))
-    for vowel_key, candidates in sorted(vowel_info['conflicts'].items()):
-        print(
-            'WARNING: multiple vowel candidates in %s for %s, using %s'
-            % (vowel_dir, vowel_key, candidates[0])
+    missing = [key for key in vowel_keys if key not in vowel_info['selected']]
+    if missing:
+        raise FileNotFoundError(
+            'Missing required vowel files in %s for mode=%s: %s'
+            % (vowel_dir, vowel_embedding_mode, ', '.join(missing))
         )
+    for vowel_key, candidates in sorted(vowel_info['conflicts'].items()):
+        if vowel_key in vowel_keys:
+            print(
+                'WARNING: multiple vowel candidates in %s for %s, using %s'
+                % (vowel_dir, vowel_key, candidates[0])
+            )
 
     vowel_mels = []
-    for vowel_key in VOWEL_KEYS:
+    repeat_seconds = float(hp.data.get('vowel_seconds', 1.0))
+    for vowel_key in vowel_keys:
         wav_path = vowel_info['selected'][vowel_key]
         wav, _ = load_wav(wav_path, sample_rate=hp.audio.sample_rate, mono=True)
-        wav = peak_normalize(repeat_pad_wav(wav, hp.audio.sample_rate, 1.0))
+        wav = peak_normalize(repeat_pad_wav(wav, hp.audio.sample_rate, repeat_seconds))
         mel = torch.from_numpy(audio.get_mel(wav)).float().to(device)
         vowel_mels.append(mel)
 
@@ -70,11 +84,11 @@ def overlap_add(windows, total_length, window_length, hop_length):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Run sliding-window long-form enhancement on a mixed snore wav')
+    parser = argparse.ArgumentParser(description='Run SnoreFilter sliding-window long-form enhancement on a mixed snore wav')
     parser.add_argument('-c', '--config', default=os.path.join('config', 'enhancement.yaml'), help='YAML config path')
     parser.add_argument('--checkpoint-path', required=True, help='Trained enhancement checkpoint')
     parser.add_argument('--mixed-file', required=True, help='Path to the 30-second mixed wav')
-    parser.add_argument('--vowel-dir', required=True, help='Directory containing 5 vowel wavs')
+    parser.add_argument('--vowel-dir', required=True, help='Directory containing the subject vowel wavs, ignored when model.use_d_vector=false')
     parser.add_argument('--embedder-path', default=None, help='Embedder checkpoint used for vowel encoding, defaults to %s' % DEFAULT_EMBEDDER_PATH)
     parser.add_argument('--output-path', required=True, help='Output enhanced wav path')
     parser.add_argument('--device', default='auto', help='cpu, cuda, or auto')
@@ -82,23 +96,31 @@ def main():
 
     hp = HParam(args.config)
     device = build_device(args.device)
-    embedder_path = resolve_embedder_path(args.embedder_path)
+    d_vector_enabled = use_d_vector(hp)
+    embedder_path = resolve_embedder_path(args.embedder_path) if d_vector_enabled else None
     audio = Audio(hp)
 
     checkpoint = torch.load(args.checkpoint_path, map_location=device)
-    model = VoiceFilter(hp).to(device)
+    model = SnoreFilter(hp).to(device)
     model.load_state_dict(checkpoint['model'])
     model.eval()
 
-    adapter = EmbeddingAdapter(hp.embedder.emb_dim, hp.model.adapter_hidden_dim).to(device) if hp.model.use_embedding_adapter else None
+    adapter = None
+    if d_vector_enabled and hp.model.use_embedding_adapter:
+        adapter = EmbeddingAdapter(hp.embedder.emb_dim, hp.model.adapter_hidden_dim).to(device)
     if adapter is not None and checkpoint.get('adapter') is not None:
         adapter.load_state_dict(checkpoint['adapter'])
         adapter.eval()
 
-    embedding = load_vowel_embedding(hp, device, args.vowel_dir, embedder_path=embedder_path)
-    if adapter is not None:
-        with torch.no_grad():
-            embedding = adapter(embedding)
+    if d_vector_enabled:
+        embedding = load_vowel_embedding(hp, device, args.vowel_dir, embedder_path=embedder_path)
+        print('Using vowel_embedding_mode=%s' % normalize_vowel_embedding_mode(hp.data.get('vowel_embedding_mode', 'avg')))
+        if adapter is not None:
+            with torch.no_grad():
+                embedding = adapter(embedding)
+    else:
+        embedding = zero_embedding(1, hp, device=device)
+        print('Using zero d-vector ablation: vowel_dir is ignored')
 
     mixed_wav, _ = load_wav(args.mixed_file, sample_rate=hp.audio.sample_rate, mono=True)
     mixed_wav = peak_normalize(mixed_wav)

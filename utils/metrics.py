@@ -34,3 +34,7 @@ def snr(clean_wav, test_wav):
 
 def snr_improvement(clean_wav, mixed_wav, enhanced_wav):
     return safe_metric(snr(clean_wav, enhanced_wav) - snr(clean_wav, mixed_wav))
+
+
+def si_sdr_improvement(clean_wav, mixed_wav, enhanced_wav):
+    return safe_metric(si_sdr(clean_wav, enhanced_wav) - si_sdr(clean_wav, mixed_wav))

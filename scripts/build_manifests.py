@@ -14,15 +14,17 @@ from utils.dataset_index import (
     safe_float,
     save_jsonl,
 )
+from utils.hparams import HParam
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Build enhancement manifests from subjects and subject splits')
+    parser.add_argument('-c', '--config', default=os.path.join('config', 'enhancement.yaml'), help='YAML config path')
     parser.add_argument('--subjects', default=os.path.join('metadata', 'subjects.json'), help='subjects.json path')
     parser.add_argument('--splits-dir', default='splits', help='Directory containing *_subjects.txt')
     parser.add_argument('--output-dir', default='manifests', help='Directory for output jsonl files')
     parser.add_argument('--processed-root', default=None, help='Optional processed root used to resolve audio and embedding paths')
-    parser.add_argument('--mix-dir-name', default=None, help='Optional raw mix subdirectory name, e.g. 合成声')
+    parser.add_argument('--mix-dir-name', default=None, help='Optional raw mix subdirectory name')
     parser.add_argument('--min-snr-db', type=float, default=None, help='Optional lower bound for actual_snr_db filtering')
     parser.add_argument('--max-snr-db', type=float, default=None, help='Optional upper bound for actual_snr_db filtering')
     parser.add_argument('--snr-stats-csv', default=None, help='Optional CSV or JSONL exported by preprocess_audio.py')
@@ -54,7 +56,10 @@ def snr_in_range(row, min_snr_db=None, max_snr_db=None):
 
 def main():
     args = parse_args()
+    hp = HParam(args.config)
     snr_lookup = load_snr_lookup(args.snr_stats_csv)
+    processed_root = args.processed_root if args.processed_root is not None else hp.data.get('processed_root')
+    vowel_embedding_mode = hp.data.get('vowel_embedding_mode', 'avg')
 
     subjects = load_subjects(args.subjects)
     for split_name in ['train', 'val', 'test']:
@@ -62,9 +67,10 @@ def main():
         rows = build_manifest_rows(
             subjects,
             subject_ids,
-            processed_root=args.processed_root,
+            processed_root=processed_root,
             mix_dir_name=args.mix_dir_name,
             snr_lookup=snr_lookup,
+            vowel_embedding_mode=vowel_embedding_mode,
         )
         raw_count = len(rows)
         rows = [
@@ -74,7 +80,10 @@ def main():
 
         out_path = os.path.join(args.output_dir, 'enhancement_manifest_%s.jsonl' % split_name)
         save_jsonl(rows, out_path)
-        print('%s: %d samples (%d after SNR filter) -> %s' % (split_name, raw_count, len(rows), os.path.abspath(out_path)))
+        print(
+            '%s: %d samples (%d after SNR filter, vowel_embedding_mode=%s) -> %s'
+            % (split_name, raw_count, len(rows), vowel_embedding_mode, os.path.abspath(out_path))
+        )
 
 
 if __name__ == '__main__':

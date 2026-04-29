@@ -26,6 +26,7 @@ def main():
         default=os.path.join('pretrained', 'embedder.pt'),
         help='Pretrained embedder checkpoint path',
     )
+    parser.add_argument('--skip-embedder-check', action='store_true', help='Skip checking the embedder checkpoint')
     parser.add_argument('--device', default='cuda:0', help='CUDA device expected for training')
     parser.add_argument('--require-cuda', action='store_true', help='Fail if CUDA is unavailable')
     args = parser.parse_args()
@@ -75,7 +76,9 @@ def main():
         if not noise_wavs:
             ok = fail('No .wav files were found under %s.' % os.path.abspath(args.noise_root)) and ok
 
-    if os.path.isfile(args.embedder_path):
+    if args.skip_embedder_check:
+        print('Embedder checkpoint check: skipped')
+    elif os.path.isfile(args.embedder_path):
         size_mb = os.path.getsize(args.embedder_path) / (1024.0 * 1024.0)
         print('Embedder checkpoint: %s (%.2f MB)' % (os.path.abspath(args.embedder_path), size_mb))
     else:
