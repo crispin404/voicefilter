@@ -21,8 +21,71 @@ voicefilter/
   data/
     raw/        # 完整原始被试数据，每个被试一个文件夹
     noise/      # 环境音 wav，例如 jb.wav / km.wav / qm.wav / ye.wav
+    noise_splice.txt  # 多噪声配方文件，供 NOISE_COUNT=2/3 使用
   pretrained/
     embedder.pt # 预训练 speaker embedder
+```
+
+## 多噪声模式
+
+Platformax 流程现在支持通过 `NOISE_COUNT` 选择单噪声、双噪声、三噪声模式。建议先把这件事理解成一句话：
+
+`NOISE_COUNT` 决定“这一轮实验使用哪一套混合音、预处理 mix、metadata 和 manifest”。
+
+具体规则如下：
+
+- `NOISE_COUNT=1`：单噪声模式，直接遍历 `data/noise/*.wav`
+- `NOISE_COUNT=2/3`：多噪声模式，读取 `data/noise_splice.txt`
+- `noise_splice.txt` 每行一个配方，写噪声 stem，不带 `.wav`
+- 例如：`jb+nz`、`dpt+km`、`xcq+jb+ye`
+- 同一个 `noise_splice.txt` 可以同时放 2 段和 3 段配方；脚本会按当前 `NOISE_COUNT` 自动筛选
+- 多噪声模式下，会先按配方顺序把多个噪声拼接，再循环补齐到当前 clean snore 长度，再按目标 SNR 与 clean 混叠
+
+各模式对应的产物隔离如下：
+
+```text
+NOISE_COUNT=1
+  原始合成声:   合成声
+  预处理 mix:   processed/mix
+  manifest:     manifests
+  synthesis 元数据: metadata/synthesized_mix_metadata.jsonl/.csv
+  preprocess 统计: metadata/preprocess_snr_stats.csv
+
+NOISE_COUNT=2
+  原始合成声:   合成声_2
+  预处理 mix:   processed/mix_2
+  manifest:     manifests_2
+  synthesis 元数据: metadata/synthesized_mix_metadata_2.jsonl/.csv
+  preprocess 统计: metadata/preprocess_snr_stats_2.csv
+
+NOISE_COUNT=3
+  原始合成声:   合成声_3
+  预处理 mix:   processed/mix_3
+  manifest:     manifests_3
+  synthesis 元数据: metadata/synthesized_mix_metadata_3.jsonl/.csv
+  preprocess 统计: metadata/preprocess_snr_stats_3.csv
+```
+
+注意两点：
+
+- `processed/clean` 仍然共用，不会按 `NOISE_COUNT` 再拆一套
+- 一键脚本的评估输出 `outputs/platformax/eval/metrics.csv` 默认不会按模式自动改名；如果你要做 1/2/3 对比，建议手动给 `OUTPUT_CSV` 传不同文件名
+
+运行示例：
+
+```bash
+NOISE_COUNT=2 bash scripts/platformax_run_all.sh
+NOISE_COUNT=3 DEVICE=cuda:0 bash scripts/platformax_run_all.sh
+```
+
+如果你分步执行，也请在下面这些脚本里带上相同的 `--noise-count`：
+
+```bash
+python scripts/synthesize_mixed_snore.py -c config/platform_gpu.yaml --noise-root data/noise --noise-count 2 --metadata-path metadata/synthesized_mix_metadata_2.jsonl --metadata-csv metadata/synthesized_mix_metadata_2.csv
+python scripts/preprocess_audio.py -c config/platform_gpu.yaml --subjects metadata/subjects.json --processed-root processed --noise-count 2 --mix-dir-name 合成声_2 --synthesis-metadata metadata/synthesized_mix_metadata_2.jsonl --snr-stats-csv metadata/preprocess_snr_stats_2.csv
+python scripts/build_manifests.py -c config/platform_gpu.yaml --subjects metadata/subjects.json --splits-dir splits --output-dir manifests_2 --processed-root processed --noise-count 2 --mix-dir-name 合成声_2 --snr-stats-csv metadata/preprocess_snr_stats_2.csv
+python scripts/train_enhancement.py -c config/platform_gpu.yaml --noise-count 2 --device cuda:0
+python scripts/evaluate_enhancement.py -c config/platform_gpu.yaml --noise-count 2 --checkpoint-path outputs/platformax/checkpoints/best_metric.pt --output-csv outputs/platformax/eval/metrics_2.csv --no-save-wavs --device cuda:0
 ```
 
 `pretrained/` 和 `data/` 默认不会进 git，需要单独上传到平台。
@@ -108,16 +171,22 @@ python scripts/audit_clean_snores.py --subjects metadata/subjects.json
 
 如果环境、数据和权重都确认正常，可以直接运行一键脚本。
 
-默认使用 `cuda:1`：
+默认使用配置文件里的 `data.noise_count`，设备默认是 `cuda:0`：
 
 ```bash
 bash scripts/platformax_run_all.sh
 ```
 
-改用 GPU0：
+例如显式跑双噪声：
 
 ```bash
-DEVICE=cuda:0 bash scripts/platformax_run_all.sh
+NOISE_COUNT=2 bash scripts/platformax_run_all.sh
+```
+
+改用 GPU1：
+
+```bash
+DEVICE=cuda:1 bash scripts/platformax_run_all.sh
 ```
 
 如果 GPU0 被占用，最稳妥的方式是只暴露物理 GPU1：
@@ -137,6 +206,7 @@ check -> scan -> split -> synthesize -> preprocess -> manifest -> embedding(cond
 - 评估权重：`outputs/platformax/checkpoints/best_metric.pt`
 - 评估结果：`outputs/platformax/eval/metrics.csv`
 - 默认不导出增强 wav
+- 噪声模式：优先读环境变量 `NOISE_COUNT`；如果没传，就回退到 `config/platform_gpu.yaml` 里的 `data.noise_count`
 - 划分和混合音裁剪随机种子：`SEED=42`
 - 训练随机种子：来自 `config/platform_gpu.yaml` 中的 `train.seed`
 - d-vector 开关：来自 `config/platform_gpu.yaml` 中的 `model.use_d_vector`
@@ -148,13 +218,23 @@ check -> scan -> split -> synthesize -> preprocess -> manifest -> embedding(cond
 model:
   use_d_vector: true
 data:
+  noise_count: 1
   vowel_embedding_mode: avg
 ```
 
+- `noise_count: 1/2/3`：选择当前实验使用单噪声、双噪声还是三噪声数据流
 - `use_d_vector: true`：正常使用真实元音 embedding
 - `use_d_vector: false`：进入零向量占位消融，一键脚本会跳过 embedder 检查和 embedding 预计算
 - `avg`：对 `a/e/i/o/u` 分别编码后取均值，输出到 `processed/embeddings/`
 - `a/e/i/o/u`：只使用对应元音，输出到 `processed/embeddings_a/`、`processed/embeddings_o/` 等目录
+
+如果你想做对比实验，推荐把“实验维度”和“输出文件名”一起固定下来。
+
+例如双噪声评估结果单独写到另一个 CSV：
+
+```bash
+NOISE_COUNT=2 OUTPUT_CSV=outputs/platformax/eval/metrics_2.csv bash scripts/platformax_run_all.sh
+```
 
 如果你想做 `d-vector` 或单元音对比实验，直接修改 `config/platform_gpu.yaml`，然后重新跑一键脚本即可。
 
@@ -213,10 +293,18 @@ splits/test_subjects.txt
 
 ### 3. 增量生成混合音
 
+这一阶段开始，`noise_count` 会真正影响数据流。
+
+- 单噪声：`noise_count=1`，通常使用 `合成声`
+- 双噪声：`noise_count=2`，通常使用 `合成声_2`
+- 三噪声：`noise_count=3`，通常使用 `合成声_3`
+
 ```bash
 python scripts/synthesize_mixed_snore.py \
+  -c config/platform_gpu.yaml \
   --subjects metadata/subjects.json \
   --noise-root data/noise \
+  --noise-count 1 \
   --output-subdir 合成声 \
   --target-snr-db 5.0 \
   --seed 42 \
@@ -224,22 +312,39 @@ python scripts/synthesize_mixed_snore.py \
   --metadata-csv metadata/synthesized_mix_metadata.csv
 ```
 
-作用：把 clean snore 和环境音按目标 SNR 合成为混合音，并写出合成元数据。
+如果你要跑双噪声，对应地改成：
+
+```bash
+python scripts/synthesize_mixed_snore.py \
+  -c config/platform_gpu.yaml \
+  --subjects metadata/subjects.json \
+  --noise-root data/noise \
+  --noise-count 2 \
+  --output-subdir 合成声_2 \
+  --target-snr-db 5.0 \
+  --seed 42 \
+  --metadata-path metadata/synthesized_mix_metadata_2.jsonl \
+  --metadata-csv metadata/synthesized_mix_metadata_2.csv
+```
+
+作用：把 clean snore 和环境音按目标 SNR 合成为混合音，并写出当前模式自己的合成元数据。
 
 ### 4. 预处理音频
 
 ```bash
 python scripts/preprocess_audio.py \
+  -c config/platform_gpu.yaml \
   --subjects metadata/subjects.json \
   --processed-root processed \
   --sample-rate 16000 \
   --vowel-seconds 1.0 \
+  --noise-count 1 \
   --mix-dir-name 合成声 \
   --synthesis-metadata metadata/synthesized_mix_metadata.jsonl \
   --snr-stats-csv metadata/preprocess_snr_stats.csv
 ```
 
-作用：统一采样率、整理 `processed/vowel`、`processed/clean`、`processed/mix`，并记录预处理 SNR 统计。
+作用：统一采样率、整理 `processed/vowel`、`processed/clean`、当前模式对应的 `processed/mix[_N]`，并记录当前模式自己的预处理 SNR 统计。
 
 ### 5. 生成 manifest
 
@@ -248,11 +353,14 @@ python scripts/build_manifests.py \
   -c config/platform_gpu.yaml \
   --subjects metadata/subjects.json \
   --splits-dir splits \
+  --noise-count 1 \
   --output-dir manifests \
   --processed-root processed \
   --mix-dir-name 合成声 \
   --snr-stats-csv metadata/preprocess_snr_stats.csv
 ```
+
+如果你跑的是双噪声，这一步通常改成 `--noise-count 2 --output-dir manifests_2 --mix-dir-name 合成声_2 --snr-stats-csv metadata/preprocess_snr_stats_2.csv`。
 
 建议确认每个 split 都不是 0：
 
@@ -296,6 +404,7 @@ python scripts/precompute_vowel_embeddings.py \
 ```bash
 python scripts/train_enhancement.py \
   -c config/platform_gpu.yaml \
+  --noise-count 1 \
   --device cuda:0
 ```
 
@@ -304,6 +413,7 @@ python scripts/train_enhancement.py \
 ```bash
 python scripts/train_enhancement.py \
   -c config/platform_gpu.yaml \
+  --noise-count 1 \
   --device cuda:1
 ```
 
@@ -312,6 +422,7 @@ python scripts/train_enhancement.py \
 ```bash
 CUDA_VISIBLE_DEVICES=1 python scripts/train_enhancement.py \
   -c config/platform_gpu.yaml \
+  --noise-count 1 \
   --device cuda:0
 ```
 
@@ -344,6 +455,7 @@ train:
 ```bash
 python scripts/train_enhancement.py \
   -c config/platform_gpu.yaml \
+  --noise-count 1 \
   --device cuda:1 \
   --checkpoint-path outputs/platformax/checkpoints/latest.pt
 ```
@@ -353,6 +465,7 @@ python scripts/train_enhancement.py \
 ```bash
 CUDA_VISIBLE_DEVICES=1 python scripts/train_enhancement.py \
   -c config/platform_gpu.yaml \
+  --noise-count 1 \
   --device cuda:0 \
   --checkpoint-path outputs/platformax/checkpoints/latest.pt
 ```
@@ -368,8 +481,9 @@ CUDA_VISIBLE_DEVICES=1 python scripts/train_enhancement.py \
 ```bash
 python scripts/evaluate_enhancement.py \
   -c config/platform_gpu.yaml \
-  --checkpoint-path outputs/platformax/checkpoints/best_loss.pt \
-  --output-csv outputs/platformax/eval/metrics_a_1.csv \
+  --noise-count 1 \
+  --checkpoint-path outputs/platformax/checkpoints/best_metric.pt \
+  --output-csv outputs/platformax/eval/metrics.csv \
   --no-save-wavs \
   --device cuda:0
 ```
@@ -379,11 +493,18 @@ python scripts/evaluate_enhancement.py \
 ```bash
 CUDA_VISIBLE_DEVICES=1 python scripts/evaluate_enhancement.py \
   -c config/platform_gpu.yaml \
+  --noise-count 2 \
   --checkpoint-path outputs/platformax/checkpoints/best_metric.pt \
-  --output-csv outputs/platformax/eval/metrics.csv \
+  --output-csv outputs/platformax/eval/metrics_2.csv \
   --no-save-wavs \
   --device cuda:0
 ```
+
+建议把不同模式的评估 CSV 主动分开命名，例如：
+
+- 单噪声：`metrics_1.csv`
+- 双噪声：`metrics_2.csv`
+- 三噪声：`metrics_3.csv`
 
 ### `best_metric.pt` 和 `best_loss.pt` 怎么选
 
@@ -407,10 +528,11 @@ CUDA_VISIBLE_DEVICES=1 python scripts/evaluate_enhancement.py \
 ```bash
 python scripts/evaluate_enhancement.py \
   -c config/platform_gpu.yaml \
-  --checkpoint-path outputs/platformax/checkpoints/best_metric.pt \
-  --output-csv outputs/platformax/eval/metrics.csv \
+  --noise-count 1 \
+  --checkpoint-path outputs/platformax/checkpoints/best_loss.pt \
+  --output-csv outputs/platformax/eval/metrics_11.csv \
   --save-wavs-dir outputs/platformax/eval/enhanced_wavs \
-  --device cuda:1
+  --device cuda:0
 ```
 
 ### 自定义多人评估：`splits/metrics_test.txt`
@@ -434,15 +556,16 @@ subject_c
 ```bash
 python scripts/evaluate_enhancement.py \
   -c config/platform_gpu.yaml \
+  --noise-count 2 \
   --checkpoint-path outputs/platformax/checkpoints/best_metric.pt \
   --subject-ids-file splits/metrics_test.txt \
   --subjects metadata/subjects.json \
-  --output-csv outputs/platformax/eval/metrics_test.csv \
+  --output-csv outputs/platformax/eval/metrics_test_2.csv \
   --no-save-wavs \
   --device cuda:1
 ```
 
-这条路径会直接从 `metadata/subjects.json` 和现有 `processed/` 数据动态构建评估样本，不依赖 `splits/test_subjects.txt`，也不需要重建 manifest。
+这条路径会直接从 `metadata/subjects.json` 和现有 `processed/` 数据动态构建评估样本，不依赖 `splits/test_subjects.txt`，也不需要重建 manifest；但它仍然会受 `--noise-count` 影响，所以要和当前实验模式保持一致。
 
 ### 主要评估指标
 
@@ -463,6 +586,8 @@ python scripts/evaluate_enhancement.py \
 
 以后如果你新增 `data/noise/*.wav`、删除效果不好的环境音，或者手动增删某个被试目录里的原始 clean snore，不需要从头全量重跑。
 
+如果你修改的是 `data/noise_splice.txt`，并且当前实验是 `noise_count=2` 或 `3`，也按“环境音变更”处理：重跑 `synthesize -> preprocess -> manifest`。
+
 如果你修改的是 `config/platform_gpu.yaml` 里的 `data.vowel_embedding_mode`，至少要重新执行 `build_manifests.py` 和 `precompute_vowel_embeddings.py`，因为 manifest 里的 `embedding_path` 会跟着模式切换。
 
 如果你修改的是 `model.use_d_vector`：
@@ -482,8 +607,10 @@ python scripts/scan_dataset.py \
 
 ```bash
 python scripts/synthesize_mixed_snore.py \
+  -c config/platform_gpu.yaml \
   --subjects metadata/subjects.json \
   --noise-root data/noise \
+  --noise-count 1 \
   --output-subdir 合成声 \
   --target-snr-db 5.0 \
   --seed 42 \
@@ -491,10 +618,12 @@ python scripts/synthesize_mixed_snore.py \
   --metadata-csv metadata/synthesized_mix_metadata.csv
 
 python scripts/preprocess_audio.py \
+  -c config/platform_gpu.yaml \
   --subjects metadata/subjects.json \
   --processed-root processed \
   --sample-rate 16000 \
   --vowel-seconds 1.0 \
+  --noise-count 1 \
   --mix-dir-name 合成声 \
   --synthesis-metadata metadata/synthesized_mix_metadata.jsonl \
   --snr-stats-csv metadata/preprocess_snr_stats.csv
@@ -503,11 +632,14 @@ python scripts/build_manifests.py \
   -c config/platform_gpu.yaml \
   --subjects metadata/subjects.json \
   --splits-dir splits \
+  --noise-count 1 \
   --output-dir manifests \
   --processed-root processed \
   --mix-dir-name 合成声 \
   --snr-stats-csv metadata/preprocess_snr_stats.csv
 ```
+
+如果你当前跑的是双噪声或三噪声，请把上面三条命令里的 `noise-count / output-subdir / metadata-path / snr-stats-csv / output-dir / mix-dir-name` 一起切到对应模式，保持整条链一致。
 
 脚本会自动补新增文件、删除已剔除环境音对应的旧文件，并跳过没有变化的样本。需要彻底重跑时，在合成和预处理命令里加 `--force`。
 
@@ -520,6 +652,8 @@ ls -lh outputs/platformax/checkpoints/best_metric.pt
 ls -lh outputs/platformax/checkpoints/best_loss.pt
 ls -lh outputs/platformax/eval/metrics.csv
 ```
+
+如果你在对比实验中改过 `OUTPUT_CSV`，这里也记得把检查路径改成对应的 `metrics_1.csv / metrics_2.csv / metrics_3.csv`。
 
 确认训练日志里确实在用 GPU：
 

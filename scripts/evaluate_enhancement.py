@@ -11,7 +11,15 @@ from tqdm import tqdm
 from model.embedding_adapter import EmbeddingAdapter
 from model.model import SnoreFilter
 from utils.audio import Audio, save_wav
-from utils.dataset_index import build_manifest_rows, ensure_dir, load_jsonl, load_subjects
+from utils.dataset_index import (
+    build_manifest_rows,
+    ensure_dir,
+    get_data_noise_count,
+    load_jsonl,
+    load_subjects,
+    normalize_noise_count,
+    resolve_manifest_path,
+)
 from utils.dvector import use_d_vector
 from utils.enhancement_eval import evaluate_item, print_summary
 from utils.embedder_checkpoint import DEFAULT_EMBEDDER_PATH, resolve_embedder_path
@@ -28,6 +36,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Evaluate SnoreFilter enhanced outputs on a manifest and write CSV metrics')
     parser.add_argument('-c', '--config', default=os.path.join('config', 'enhancement.yaml'), help='YAML config path')
     parser.add_argument('--checkpoint-path', required=True, help='Trained enhancement checkpoint')
+    parser.add_argument('--noise-count', type=int, default=None, help='Noise mode to evaluate: 1, 2, or 3')
     source_group = parser.add_mutually_exclusive_group()
     source_group.add_argument('--manifest', default=None, help='Manifest path, defaults to config test manifest')
     source_group.add_argument('--subject-ids-file', default=None, help='Text file containing one subject_id per line for custom evaluation')
@@ -38,6 +47,20 @@ def parse_args():
     parser.add_argument('--no-save-wavs', action='store_true', help='Do not write enhanced wav files')
     parser.add_argument('--device', default='auto', help='cpu, cuda, or auto')
     return parser.parse_args()
+
+
+def resolve_noise_count(hp, cli_noise_count):
+    if cli_noise_count is not None:
+        return normalize_noise_count(cli_noise_count)
+    return get_data_noise_count(hp.data, default=1)
+
+
+def apply_runtime_noise_mode(hp, noise_count):
+    hp.data.noise_count = int(noise_count)
+    for key in ['manifest_train', 'manifest_val', 'manifest_test']:
+        if key in hp.data and hp.data.get(key):
+            hp.data[key] = resolve_manifest_path(hp.data[key], noise_count)
+    return hp
 
 
 def load_selected_subject_ids(path):
@@ -60,7 +83,7 @@ def load_selected_subject_ids(path):
     return subject_ids
 
 
-def load_evaluation_items(args, hp):
+def load_evaluation_items(args, hp, noise_count):
     if args.subject_ids_file:
         subject_ids = load_selected_subject_ids(args.subject_ids_file)
         subjects = load_subjects(args.subjects)
@@ -79,6 +102,7 @@ def load_evaluation_items(args, hp):
             subject_ids,
             processed_root=processed_root,
             vowel_embedding_mode=vowel_embedding_mode,
+            noise_count=noise_count,
         )
         if not items:
             raise ValueError(
@@ -105,6 +129,8 @@ def main():
     args = parse_args()
 
     hp = HParam(args.config)
+    noise_count = resolve_noise_count(hp, args.noise_count)
+    hp = apply_runtime_noise_mode(hp, noise_count)
     device = build_device(args.device)
     d_vector_enabled = use_d_vector(hp)
     embedder_path = resolve_embedder_path(args.embedder_path, required=False) if d_vector_enabled else None
@@ -122,7 +148,7 @@ def main():
         adapter.load_state_dict(checkpoint['adapter'])
         adapter.eval()
 
-    items = load_evaluation_items(args, hp)
+    items = load_evaluation_items(args, hp, noise_count)
     ensure_dir(os.path.dirname(args.output_csv))
     if not args.no_save_wavs:
         ensure_dir(args.save_wavs_dir)
@@ -149,11 +175,11 @@ def main():
         rows.append(row)
 
     fieldnames = [
-        'subject_id', 'noise_type', 'snore_index',        
+        'subject_id', 'noise_type', 'snore_index',
         'input_snr', 'snr_improvement', 'enhanced_snr',
         'input_si_sdr', 'si_sdr_improvement', 'si_sdr', 
     ]
-    # 'mix_path','clean_path', 'enhanced_path', 'mag_l1','clean_active_ratio', 'clean_active_windows', 'clean_total_windows',
+    # 'noise_count',  'mix_path','clean_path', 'enhanced_path', 'mag_l1','clean_active_ratio', 'clean_active_windows', 'clean_total_windows',
     
     decimal_fields = {
         'input_snr',

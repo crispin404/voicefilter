@@ -19,27 +19,42 @@ from utils.dataset_index import (
     VOWEL_CANONICAL_FILENAMES,
     build_clean_index,
     build_snr_lookup,
+    default_mix_dir_name,
+    default_processed_mix_subdir,
     ensure_dir,
+    get_data_noise_count,
     iter_subject_vowel_items,
     list_subject_mix_paths,
     load_csv_rows,
     load_jsonl,
     load_subjects,
+    normalize_noise_count,
     normalize_path,
     parse_mix_filename,
+    resolve_mode_filepath,
     safe_float,
     write_csv,
 )
+from utils.hparams import HParam
+
+
+DEFAULT_SUBJECTS_PATH = os.path.join('metadata', 'subjects.json')
+DEFAULT_MIX_DIR_NAME = '合成声'
+DEFAULT_SYNTHESIS_METADATA_JSONL = os.path.join('metadata', 'synthesized_mix_metadata.jsonl')
+DEFAULT_SYNTHESIS_METADATA_CSV = os.path.join('metadata', 'synthesized_mix_metadata.csv')
+DEFAULT_SNR_STATS_CSV = os.path.join('metadata', 'preprocess_snr_stats.csv')
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Incrementally preprocess vowel, clean snore, and mix audio.')
-    parser.add_argument('--subjects', default=os.path.join('metadata', 'subjects.json'), help='subjects.json path')
+    parser.add_argument('-c', '--config', default=None, help='Optional YAML config path used to read data.noise_count')
+    parser.add_argument('--subjects', default=DEFAULT_SUBJECTS_PATH, help='subjects.json path')
     parser.add_argument('--processed-root', default='processed', help='Processed output root')
     parser.add_argument('--sample-rate', type=int, default=16000, help='Target sample rate')
     parser.add_argument('--vowel-seconds', type=float, default=1.0, help='Target vowel duration after repeat-padding')
     parser.add_argument('--pair-peak', type=float, default=0.95, help='Peak target used for pair-wise clean/mix normalization')
-    parser.add_argument('--mix-dir-name', default='合成声', help='Raw mix subdirectory name, e.g. 合成声')
+    parser.add_argument('--mix-dir-name', default=DEFAULT_MIX_DIR_NAME, help='Raw mix subdirectory name')
+    parser.add_argument('--noise-count', type=int, default=None, help='Noise mode to preprocess: 1, 2, or 3')
     parser.add_argument('--force', action='store_true', help='Reprocess all expected outputs even when they are up to date')
     parser.add_argument(
         '--synthesis-metadata',
@@ -48,10 +63,33 @@ def parse_args():
     )
     parser.add_argument(
         '--snr-stats-csv',
-        default=os.path.join('metadata', 'preprocess_snr_stats.csv'),
+        default=DEFAULT_SNR_STATS_CSV,
         help='CSV path for per-pair SNR statistics',
     )
     return parser.parse_args()
+
+
+def resolve_noise_count(config_path, cli_noise_count):
+    if cli_noise_count is not None:
+        return normalize_noise_count(cli_noise_count)
+    if config_path:
+        hp = HParam(config_path)
+        return get_data_noise_count(hp.data, default=1)
+    return 1
+
+
+def resolve_mode_mix_dir_name(mix_dir_name, noise_count):
+    if mix_dir_name == DEFAULT_MIX_DIR_NAME:
+        return default_mix_dir_name(noise_count)
+    return mix_dir_name
+
+
+def resolve_mode_file_path(path, default_path, noise_count):
+    if not path:
+        return path
+    if path == default_path:
+        return resolve_mode_filepath(path, noise_count)
+    return path
 
 
 def load_metadata_lookup(path):
@@ -93,8 +131,11 @@ def output_up_to_date(output_paths, source_paths):
     return all(os.path.isfile(path) and output_mtime >= os.path.getmtime(path) for path in source_paths)
 
 
-def stats_match_metadata(stats_row, pair_metadata):
+def stats_match_metadata(stats_row, pair_metadata, noise_count):
     if not stats_row:
+        return False
+    stats_noise_count = safe_float(stats_row.get('noise_count'))
+    if stats_noise_count is not None and stats_noise_count != float(noise_count):
         return False
     if not pair_metadata:
         return True
@@ -109,12 +150,13 @@ def stats_match_metadata(stats_row, pair_metadata):
     return True
 
 
-def normalize_stats_row(row, subject_id, clean_path, mix_path, dst_clean_path, dst_mix_path, mix_meta):
+def normalize_stats_row(row, subject_id, clean_path, mix_path, dst_clean_path, dst_mix_path, mix_meta, noise_count):
     updated = dict(row)
     updated['subject_id'] = subject_id
     updated['clean_file'] = normalize_path(clean_path)
     updated['mix_file'] = normalize_path(mix_path)
     updated['noise_type'] = mix_meta['noise_type']
+    updated['noise_count'] = int(noise_count)
     updated['output_clean_file'] = normalize_path(dst_clean_path)
     updated['output_mix_file'] = normalize_path(dst_mix_path)
     return updated
@@ -171,14 +213,28 @@ def preprocess_pair(clean_path, mix_path, dst_clean_path, dst_mix_path, sample_r
     }
 
 
-def remove_stale_processed_files(mix_out_dir, clean_out_dir, expected_mix_filenames, expected_clean_filenames):
+def current_mode_clean_filename(path, noise_count):
+    basename = os.path.basename(path)
+    if not basename.lower().endswith('_clean.wav'):
+        return False
+    mix_basename = basename[:-10] + '.wav'
+    mix_meta = parse_mix_filename(mix_basename)
+    if mix_meta is None:
+        return False
+    return mix_meta['noise_type'].count('+') + 1 == int(noise_count)
+
+
+def remove_stale_processed_files(mix_out_dir, clean_out_dir, expected_mix_filenames, expected_clean_filenames, noise_count):
     removed = 0
     for path in list_subject_processed_wavs(mix_out_dir):
         if os.path.basename(path) not in expected_mix_filenames:
             os.remove(path)
             removed += 1
     for path in list_subject_processed_wavs(clean_out_dir):
-        if os.path.basename(path) not in expected_clean_filenames:
+        basename = os.path.basename(path)
+        if not current_mode_clean_filename(path, noise_count):
+            continue
+        if basename not in expected_clean_filenames:
             os.remove(path)
             removed += 1
     return removed
@@ -194,14 +250,14 @@ def list_subject_processed_wavs(path):
     ]
 
 
-def preprocess_subject(subject, processed_root, sample_rate, vowel_seconds, pair_peak, mix_dir_name, metadata_lookup, stats_lookup, force=False):
+def preprocess_subject(subject, processed_root, sample_rate, vowel_seconds, pair_peak, mix_dir_name, metadata_lookup, stats_lookup, noise_count, force=False):
     subject_id = subject['subject_id']
     counts = {'vowel': 0, 'vowel_skipped': 0, 'clean': 0, 'mix': 0, 'skipped': 0, 'removed': 0}
     snr_rows = []
 
     vowel_out_dir = os.path.join(processed_root, 'vowel', subject_id)
     clean_out_dir = os.path.join(processed_root, 'clean', subject_id)
-    mix_out_dir = os.path.join(processed_root, 'mix', subject_id)
+    mix_out_dir = os.path.join(processed_root, default_processed_mix_subdir(noise_count), subject_id)
     ensure_dir(vowel_out_dir)
     ensure_dir(clean_out_dir)
     ensure_dir(mix_out_dir)
@@ -224,7 +280,7 @@ def preprocess_subject(subject, processed_root, sample_rate, vowel_seconds, pair
                 % (subject_id, vowel_key, candidates, candidates[0])
             )
 
-    mix_paths = list_subject_mix_paths(subject, mix_dir_name=mix_dir_name)
+    mix_paths = list_subject_mix_paths(subject, mix_dir_name=mix_dir_name, noise_count=noise_count)
     clean_index = build_clean_index(subject['snore_dir'])
     expected_mix_filenames = set()
     expected_clean_filenames = set()
@@ -253,6 +309,7 @@ def preprocess_subject(subject, processed_root, sample_rate, vowel_seconds, pair
         clean_out_dir,
         expected_mix_filenames,
         expected_clean_filenames,
+        noise_count,
     )
 
     for mix_path, mix_meta, clean_path, dst_clean_path, dst_mix_path in valid_pairs:
@@ -264,7 +321,7 @@ def preprocess_subject(subject, processed_root, sample_rate, vowel_seconds, pair
         can_skip = (
             not force
             and output_up_to_date([dst_clean_path, dst_mix_path], [clean_path, mix_path])
-            and stats_match_metadata(previous_stats, pair_metadata)
+            and stats_match_metadata(previous_stats, pair_metadata, noise_count)
         )
         if can_skip:
             snr_rows.append(
@@ -276,6 +333,7 @@ def preprocess_subject(subject, processed_root, sample_rate, vowel_seconds, pair
                     dst_clean_path,
                     dst_mix_path,
                     mix_meta,
+                    noise_count,
                 )
             )
             counts['skipped'] += 1
@@ -303,6 +361,7 @@ def preprocess_subject(subject, processed_root, sample_rate, vowel_seconds, pair
             'clean_file': normalize_path(clean_path),
             'mix_file': normalize_path(mix_path),
             'noise_type': mix_meta['noise_type'],
+            'noise_count': int(noise_count),
             'output_clean_file': normalize_path(dst_clean_path),
             'output_mix_file': normalize_path(dst_mix_path),
             'target_snr_db': pair_stats['target_snr_db'],
@@ -322,9 +381,15 @@ def preprocess_subject(subject, processed_root, sample_rate, vowel_seconds, pair
 
 def main():
     args = parse_args()
+    noise_count = resolve_noise_count(args.config, args.noise_count)
+    mix_dir_name = resolve_mode_mix_dir_name(args.mix_dir_name, noise_count)
+    synthesis_metadata = args.synthesis_metadata
+    if synthesis_metadata in (DEFAULT_SYNTHESIS_METADATA_JSONL, DEFAULT_SYNTHESIS_METADATA_CSV):
+        synthesis_metadata = resolve_mode_filepath(synthesis_metadata, noise_count)
+    snr_stats_csv = resolve_mode_file_path(args.snr_stats_csv, DEFAULT_SNR_STATS_CSV, noise_count)
 
-    metadata_lookup = load_metadata_lookup(args.synthesis_metadata)
-    stats_lookup = load_metadata_lookup(args.snr_stats_csv)
+    metadata_lookup = load_metadata_lookup(synthesis_metadata)
+    stats_lookup = load_metadata_lookup(snr_stats_csv)
     subjects = load_subjects(args.subjects)
     totals = {'vowel': 0, 'vowel_skipped': 0, 'clean': 0, 'mix': 0, 'skipped': 0, 'removed': 0}
     all_snr_rows = []
@@ -336,9 +401,10 @@ def main():
             sample_rate=args.sample_rate,
             vowel_seconds=args.vowel_seconds,
             pair_peak=args.pair_peak,
-            mix_dir_name=args.mix_dir_name,
+            mix_dir_name=mix_dir_name,
             metadata_lookup=metadata_lookup,
             stats_lookup=stats_lookup,
+            noise_count=noise_count,
             force=args.force,
         )
         for key, value in counts.items():
@@ -347,12 +413,13 @@ def main():
 
     write_csv(
         all_snr_rows,
-        args.snr_stats_csv,
+        snr_stats_csv,
         fieldnames=[
             'subject_id',
             'clean_file',
             'mix_file',
             'noise_type',
+            'noise_count',
             'output_clean_file',
             'output_mix_file',
             'target_snr_db',
@@ -365,6 +432,11 @@ def main():
     )
 
     print('Processed %d subjects into %s' % (len(subjects), os.path.abspath(args.processed_root)))
+    print('noise_count=%d raw_mix_dir=%s processed_mix_subdir=%s' % (
+        noise_count,
+        mix_dir_name,
+        default_processed_mix_subdir(noise_count),
+    ))
     print(
         'vowel=%d vowel_skipped=%d clean=%d mix=%d pair_skipped=%d removed_stale=%d'
         % (
@@ -376,7 +448,7 @@ def main():
             totals['removed'],
         )
     )
-    print('SNR stats CSV: %s' % os.path.abspath(args.snr_stats_csv))
+    print('SNR stats CSV: %s' % os.path.abspath(snr_stats_csv))
 
 
 if __name__ == '__main__':

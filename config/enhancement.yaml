@@ -30,6 +30,7 @@ embedder:
 data:
   data_root: data/raw
   processed_root: processed
+  noise_count: 1
   vowel_embedding_mode: avg
   manifest_train: manifests/enhancement_manifest_train.jsonl
   manifest_val: manifests/enhancement_manifest_val.jsonl

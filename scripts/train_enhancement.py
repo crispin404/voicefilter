@@ -16,7 +16,7 @@ from datasets.enhancement_dataset import EnhancementDataset, enhancement_collate
 from model.embedding_adapter import EmbeddingAdapter
 from model.model import SnoreFilter
 from utils.audio import Audio
-from utils.dataset_index import load_jsonl
+from utils.dataset_index import get_data_noise_count, load_jsonl, normalize_noise_count, resolve_manifest_path
 from utils.dvector import use_d_vector
 from utils.enhancement_eval import evaluate_item, summarize_rows
 from utils.embedder_checkpoint import resolve_embedder_path
@@ -254,14 +254,31 @@ def should_run_best_metric_eval(epoch_idx, total_epochs):
     return (epoch_idx % 5 == 0) or (epoch_idx > total_epochs - 5)
 
 
+def resolve_noise_count(hp, cli_noise_count):
+    if cli_noise_count is not None:
+        return normalize_noise_count(cli_noise_count)
+    return get_data_noise_count(hp.data, default=1)
+
+
+def apply_runtime_noise_mode(hp, noise_count):
+    hp.data.noise_count = int(noise_count)
+    for key in ['manifest_train', 'manifest_val', 'manifest_test']:
+        if key in hp.data and hp.data.get(key):
+            hp.data[key] = resolve_manifest_path(hp.data[key], noise_count)
+    return hp
+
+
 def main():
     parser = argparse.ArgumentParser(description='Train the SnoreFilter conditioned snore enhancement model with precomputed vowel embeddings')
     parser.add_argument('-c', '--config', default=os.path.join('config', 'enhancement.yaml'), help='YAML config path')
     parser.add_argument('--device', default='auto', help='cpu, cuda, or auto')
     parser.add_argument('--checkpoint-path', default=None, help='Optional checkpoint path to resume from')
+    parser.add_argument('--noise-count', type=int, default=None, help='Noise mode to train: 1, 2, or 3')
     args = parser.parse_args()
 
     hp = HParam(args.config)
+    noise_count = resolve_noise_count(hp, args.noise_count)
+    hp = apply_runtime_noise_mode(hp, noise_count)
     device = build_device(args.device)
     set_seed(hp.train.seed)
 
@@ -282,9 +299,13 @@ def main():
     logger = logging.getLogger('train_enhancement')
     writer = SummaryWriter(log_dir)
     logger.info('Using device: %s', device)
+    logger.info('noise_count=%d', noise_count)
     d_vector_enabled = use_d_vector(hp)
     logger.info('use_d_vector=%s', d_vector_enabled)
     logger.info('vowel_embedding_mode=%s', hp.data.get('vowel_embedding_mode', 'avg'))
+    logger.info('manifest_train=%s', hp.data.manifest_train)
+    logger.info('manifest_val=%s', hp.data.manifest_val)
+    logger.info('manifest_test=%s', hp.data.manifest_test)
     logger.info('Torch version: %s', torch.__version__)
     if device.type == 'cuda':
         logger.info('CUDA available: %s', torch.cuda.is_available())

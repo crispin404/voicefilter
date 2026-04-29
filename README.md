@@ -67,6 +67,38 @@ noise_root/
 pretrained/embedder.pt
 ```
 
+## 多噪声对比实验
+
+现在支持按 `noise_count=1/2/3` 切换单噪声、双噪声、三噪声数据流。
+
+- `noise_count=1`：保持原行为，直接遍历 `data/noise/*.wav`
+- `noise_count=2/3`：读取 `data/noise_splice.txt`
+- `noise_splice.txt` 每行一个配方，例如 `jb+nz`、`dpt+km`、`xcq+jb+ye`
+- 同一个 `noise_splice.txt` 可以同时放 2 段和 3 段配方；脚本会按当前 `noise_count` 自动筛选
+- 原始合成声目录会切到 `合成声_2 / 合成声_3`
+- 预处理混合声目录会切到 `processed/mix_2 / processed/mix_3`
+- manifest 目录会切到 `manifests_2 / manifests_3`
+- 元数据会切到 `metadata/synthesized_mix_metadata_2.jsonl`、`metadata/preprocess_snr_stats_3.csv` 等
+
+配置默认值：
+
+```yaml
+data:
+  noise_count: 1
+```
+
+手动分步命令示例：
+
+```powershell
+python scripts/synthesize_mixed_snore.py -c config/enhancement.yaml --noise-root data/noise --noise-count 2 --metadata-path metadata/synthesized_mix_metadata_2.jsonl --metadata-csv metadata/synthesized_mix_metadata_2.csv
+python scripts/preprocess_audio.py -c config/enhancement.yaml --subjects metadata/subjects.json --processed-root processed --noise-count 2 --mix-dir-name 合成声_2 --synthesis-metadata metadata/synthesized_mix_metadata_2.jsonl --snr-stats-csv metadata/preprocess_snr_stats_2.csv
+python scripts/build_manifests.py -c config/enhancement.yaml --subjects metadata/subjects.json --splits-dir splits --output-dir manifests_2 --processed-root processed --noise-count 2 --mix-dir-name 合成声_2 --snr-stats-csv metadata/preprocess_snr_stats_2.csv
+python scripts/train_enhancement.py -c config/enhancement.yaml --noise-count 2 --device cpu
+python scripts/evaluate_enhancement.py -c config/enhancement.yaml --noise-count 2 --checkpoint-path outputs/checkpoints/best_metric.pt --output-csv outputs/eval/metrics_2.csv --device cpu
+```
+
+`evaluate_enhancement.py --subject-ids-file ...` 现在也会按 `noise_count` 自动切到对应的 `processed/mix[_N]` 数据，不会再误用单噪声目录。
+
 ## 全流程逻辑图
 
 项目主流程按下面顺序组织，建议先理解每一步“在做什么”，再执行命令：

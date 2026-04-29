@@ -142,6 +142,7 @@ def evaluate_item(item, model, adapter, audio, hp, device, embedder_path=None):
     return {
         'subject_id': item['subject_id'],
         'noise_type': item['noise_type'],
+        'noise_count': int(item.get('noise_count', 1)),
         'snore_index': item['snore_index'],
         'mix_path': item['mix_path'],
         'clean_path': item['clean_path'],

@@ -25,6 +25,7 @@ VOWEL_FILES = [VOWEL_CANONICAL_FILENAMES[key] for key in VOWEL_KEYS]
 VALID_VOWEL_EMBEDDING_MODES = ['avg'] + VOWEL_KEYS
 SNORE_PATTERN = re.compile(r'^hs_(\d+)_([0-9]+)\.wav$', re.IGNORECASE)
 MIX_PATTERN = re.compile(r'^hs_(\d+)_(.+)_([0-9]+)\.wav$', re.IGNORECASE)
+NOISE_COUNT_CHOICES = [1, 2, 3]
 
 INFO_FIELD_PATTERNS = {
     'name': [r'姓名[:：]?\s*(.+)'],
@@ -61,6 +62,77 @@ def list_wavs_if_dir(path):
 
 def strip_wav_extension(filename):
     return os.path.splitext(os.path.basename(filename))[0]
+
+
+def normalize_noise_count(value):
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        raise ValueError('Unsupported noise_count: %s (expected one of: %s)' % (value, NOISE_COUNT_CHOICES))
+    if normalized not in NOISE_COUNT_CHOICES:
+        raise ValueError('Unsupported noise_count: %s (expected one of: %s)' % (value, NOISE_COUNT_CHOICES))
+    return normalized
+
+
+def get_data_noise_count(data, default=1):
+    value = data.get('noise_count', default) if hasattr(data, 'get') else default
+    return normalize_noise_count(value)
+
+
+def with_noise_count_suffix(name, noise_count):
+    normalized_noise_count = normalize_noise_count(noise_count)
+    match = re.match(r'^(.*?)(?:_(2|3))?$', str(name))
+    base_name = match.group(1) if match else str(name)
+    if normalized_noise_count == 1:
+        return base_name
+    return '%s_%d' % (base_name, normalized_noise_count)
+
+
+def resolve_mode_dirname(dirname, noise_count):
+    if not dirname:
+        return dirname
+    path = os.path.normpath(dirname)
+    parent = os.path.dirname(path)
+    basename = os.path.basename(path)
+    if basename in ('', '.'):
+        return dirname
+    updated_basename = with_noise_count_suffix(basename, noise_count)
+    if parent:
+        return os.path.join(parent, updated_basename)
+    return updated_basename
+
+
+def resolve_mode_filepath(path, noise_count):
+    if not path:
+        return path
+    normalized_noise_count = normalize_noise_count(noise_count)
+    directory = os.path.dirname(path)
+    filename = os.path.basename(path)
+    stem, ext = os.path.splitext(filename)
+    updated_stem = with_noise_count_suffix(stem, normalized_noise_count)
+    return os.path.join(directory, updated_stem + ext)
+
+
+def default_mix_dir_name(noise_count):
+    return with_noise_count_suffix(REQUIRED_DIRS['mix_dir'], noise_count)
+
+
+def default_processed_mix_subdir(noise_count):
+    return with_noise_count_suffix('mix', noise_count)
+
+
+def resolve_manifest_dir(output_dir, noise_count):
+    return resolve_mode_dirname(output_dir, noise_count)
+
+
+def resolve_manifest_path(path, noise_count):
+    if not path:
+        return path
+    directory = os.path.dirname(path)
+    if not directory:
+        return path
+    filename = os.path.basename(path)
+    return os.path.join(resolve_mode_dirname(directory, noise_count), filename)
 
 
 def vowel_key_from_filename(filename):
@@ -150,14 +222,20 @@ def resolve_subject_vowel_paths(subject, processed_root=None):
     return [path for _, path in iter_subject_vowel_items(subject) if path]
 
 
-def subject_mix_dir(subject, mix_dir_name=None):
+def subject_mix_dir(subject, mix_dir_name=None, noise_count=1):
     if mix_dir_name:
         return normalize_path(os.path.join(subject['subject_dir'], mix_dir_name))
-    return normalize_path(subject.get('mix_dir', os.path.join(subject['subject_dir'], REQUIRED_DIRS['mix_dir'])))
+    default_dir = default_mix_dir_name(noise_count)
+    if normalize_noise_count(noise_count) == 1:
+        return normalize_path(subject.get('mix_dir', os.path.join(subject['subject_dir'], default_dir)))
+    return normalize_path(os.path.join(subject['subject_dir'], default_dir))
 
 
-def list_subject_mix_paths(subject, mix_dir_name=None):
-    return [normalize_path(path) for path in list_wavs_if_dir(subject_mix_dir(subject, mix_dir_name=mix_dir_name))]
+def list_subject_mix_paths(subject, mix_dir_name=None, noise_count=1):
+    return [
+        normalize_path(path)
+        for path in list_wavs_if_dir(subject_mix_dir(subject, mix_dir_name=mix_dir_name, noise_count=noise_count))
+    ]
 
 
 def find_subject_dirs(data_root):
@@ -361,7 +439,7 @@ def parse_mix_filename(path):
     }
 
 
-def build_manifest_rows(subjects, subject_ids, processed_root=None, mix_dir_name=None, snr_lookup=None, vowel_embedding_mode='avg'):
+def build_manifest_rows(subjects, subject_ids, processed_root=None, mix_dir_name=None, snr_lookup=None, vowel_embedding_mode='avg', noise_count=1):
     subject_id_set = set(subject_ids)
     selected = [subject for subject in subjects if subject['subject_id'] in subject_id_set]
     rows = []
@@ -373,14 +451,16 @@ def build_manifest_rows(subjects, subject_ids, processed_root=None, mix_dir_name
                 mix_dir_name=mix_dir_name,
                 snr_lookup=snr_lookup,
                 vowel_embedding_mode=vowel_embedding_mode,
+                noise_count=noise_count,
             )
         )
     return rows
 
 
-def build_subject_manifest_rows(subject, processed_root=None, mix_dir_name=None, snr_lookup=None, vowel_embedding_mode='avg'):
+def build_subject_manifest_rows(subject, processed_root=None, mix_dir_name=None, snr_lookup=None, vowel_embedding_mode='avg', noise_count=1):
     raw_snore_dir = subject['snore_dir']
-    raw_mix_dir = subject_mix_dir(subject, mix_dir_name=mix_dir_name)
+    normalized_noise_count = normalize_noise_count(noise_count)
+    raw_mix_dir = subject_mix_dir(subject, mix_dir_name=mix_dir_name, noise_count=normalized_noise_count)
 
     clean_index = build_clean_index(raw_snore_dir)
     rows = []
@@ -403,8 +483,17 @@ def build_subject_manifest_rows(subject, processed_root=None, mix_dir_name=None,
             'subject_id': subject['subject_id'],
             'class_index': subject['class_index'],
             'clean_path': normalize_path(resolve_processed_clean_path(clean_path, mix_path, subject['subject_id'], processed_root)),
-            'mix_path': normalize_path(resolve_processed_audio_path(mix_path, subject['subject_id'], 'mix', processed_root)),
+            'mix_path': normalize_path(
+                resolve_processed_audio_path(
+                    mix_path,
+                    subject['subject_id'],
+                    'mix',
+                    processed_root,
+                    noise_count=normalized_noise_count,
+                )
+            ),
             'noise_type': mix_meta['noise_type'],
+            'noise_count': normalized_noise_count,
             'snore_index': mix_meta['snore_index'],
             'vowel_paths': resolve_subject_vowel_paths(subject, processed_root=processed_root),
             'embedding_path': normalize_path(resolve_embedding_path(subject['subject_id'], processed_root, vowel_embedding_mode=vowel_embedding_mode)),
@@ -416,11 +505,14 @@ def build_subject_manifest_rows(subject, processed_root=None, mix_dir_name=None,
     return rows
 
 
-def resolve_processed_audio_path(raw_path, subject_id, kind, processed_root):
+def resolve_processed_audio_path(raw_path, subject_id, kind, processed_root, noise_count=1):
     if processed_root is None:
         return raw_path
 
-    processed_dir = os.path.join(processed_root, kind, subject_id)
+    processed_kind = kind
+    if kind == 'mix':
+        processed_kind = default_processed_mix_subdir(noise_count)
+    processed_dir = os.path.join(processed_root, processed_kind, subject_id)
     filename = strip_wav_extension(raw_path) + '.wav'
     return os.path.join(processed_dir, filename)
 
