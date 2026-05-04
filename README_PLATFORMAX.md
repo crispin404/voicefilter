@@ -582,6 +582,41 @@ python scripts/evaluate_enhancement.py \
 
 终端还会打印 `all_count`、`active_count`、`zero_active_count`、`negative_improvement_rate` 和 `negative_count`，用于辅助判断模型在哪些样本上可能出现负提升。
 
+### 根据评估结果自动画图
+
+如果你想把 `outputs/platformax/eval` 里的评估 CSV 直接画成论文插图，可以使用独立脚本：
+
+```bash
+python scripts/plot_evaluation_figures.py
+```
+
+默认行为：
+
+- 必须读取 `outputs/platformax/eval/metrics.csv`，生成 4 张基础图：
+  - `si_sdr_improvement_by_noise_bar.png`
+  - `si_sdr_improvement_hist.png`
+  - `si_sdr_improvement_subject_noise_heatmap.png`
+  - `si_sdr_improvement_by_noise_box.png`
+- 如果 `outputs/platformax/eval/metrics_12.csv` 存在，会额外生成双噪声热力图：
+  - `si_sdr_improvement_subject_noise_combo_heatmap_2noise.png`
+- 如果 `outputs/platformax/eval/metrics_13.csv` 存在，会额外生成三噪声热力图：
+  - `si_sdr_improvement_subject_noise_combo_heatmap_3noise.png`
+- 所有图片默认输出到 `outputs/figures`
+- 图内不放标题，坐标轴和 colorbar 使用中文标签，适合直接插入论文正文
+- 如果 `metadata/subjects.json` 存在，脚本会优先用它做人名映射；否则会把类似 `2022_09_06_周前进` 的 `subject_id` 自动显示成 `周前进`
+
+如果你想自定义输入输出目录，可以这样运行：
+
+```bash
+python scripts/plot_evaluation_figures.py --eval-dir outputs/platformax/eval --output-dir outputs/figures
+```
+
+如果你要显式指定某个 CSV，也可以直接传路径：
+
+```bash
+python scripts/plot_evaluation_figures.py --metrics-csv outputs/platformax/eval/metrics.csv --metrics-12-csv outputs/platformax/eval/metrics_12.csv --metrics-13-csv outputs/platformax/eval/metrics_13.csv
+```
+
 ## 环境音或 clean snore 变更后怎么更新
 
 以后如果你新增 `data/noise/*.wav`、删除效果不好的环境音，或者手动增删某个被试目录里的原始 clean snore，不需要从头全量重跑。
