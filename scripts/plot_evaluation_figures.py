@@ -36,6 +36,24 @@ DOUBLE_NOISE_METRICS_NAME = 'metrics_12.csv'
 TRIPLE_NOISE_METRICS_NAME = 'metrics_13.csv'
 REQUIRED_COLUMNS = {'subject_id', 'noise_type', 'si_sdr_improvement'}
 SINGLE_NOISE_ORDER = ['nz', 'dpt', 'jb', 'ye', 'xs', 'km', 'xcq', 'qm']
+SUBJECT_LABEL_MAP = {
+    '张中兵': 'subject 1',
+    '周长保': 'subject 2',
+    '许爱林': 'subject 3',
+    '周前进': 'subject 4',
+    '刘晓峰': 'subject 5',
+}
+SUBJECT_LABEL_ORDER = ['subject 1', 'subject 2', 'subject 3', 'subject 4', 'subject 5']
+NOISE_LABEL_MAP = {
+    'dpt': 'sneeze',
+    'jb': 'footstep',
+    'nz': 'alarm',
+    'km': 'dooropen',
+    'qm': 'knock',
+    'ye': 'babycry',
+    'xs': 'laugh',
+    'xcq': 'vacuum',
+}
 SCIENTIFIC_BLUE = '#5B84B1'
 SCIENTIFIC_BLUE_DARK = '#2F5D8A'
 GRID_COLOR = '#D8E1EA'
@@ -260,6 +278,22 @@ def normalize_display_name(value):
     return text
 
 
+def format_subject_label(value):
+    display_name = normalize_display_name(value)
+    return SUBJECT_LABEL_MAP.get(display_name, display_name)
+
+
+def subject_sort_key(subject_label):
+    if subject_label in SUBJECT_LABEL_ORDER:
+        return (0, SUBJECT_LABEL_ORDER.index(subject_label))
+    return (1, str(subject_label))
+
+
+def format_noise_label(noise_type):
+    parts = str(noise_type).split('+')
+    return '+'.join(NOISE_LABEL_MAP.get(part, part) for part in parts)
+
+
 def read_metrics_rows(csv_path):
     abs_path = os.path.abspath(csv_path)
     if not os.path.isfile(csv_path):
@@ -332,10 +366,11 @@ def group_by_noise(rows):
 def build_subject_noise_matrix(rows, subject_display_map, noise_labels):
     grouped = defaultdict(lambda: defaultdict(list))
     for row in rows:
-        display_name = subject_display_map.get(row['subject_id'], normalize_display_name(row['subject_id']))
+        raw_display_name = subject_display_map.get(row['subject_id'], row['subject_id'])
+        display_name = format_subject_label(raw_display_name)
         grouped[display_name][row['noise_type']].append(float(row['si_sdr_improvement']))
 
-    subjects = sorted(grouped.keys())
+    subjects = sorted(grouped.keys(), key=subject_sort_key)
     matrix = np.full((len(subjects), len(noise_labels)), np.nan, dtype=float)
     for row_idx, subject_name in enumerate(subjects):
         for col_idx, noise_label in enumerate(noise_labels):
@@ -370,11 +405,12 @@ def save_figure(fig, output_path, dpi):
 def plot_bar_chart(rows, output_path, dpi):
     grouped = group_by_noise(rows)
     noise_labels = ordered_noise_types(grouped.keys())
+    display_noise_labels = [format_noise_label(noise) for noise in noise_labels]
     mean_values = [float(np.mean(grouped[noise])) for noise in noise_labels]
 
     fig, ax = create_figure((7.2, 4.5))
     ax.bar(
-        noise_labels,
+        display_noise_labels,
         mean_values,
         color=SCIENTIFIC_BLUE,
         edgecolor=SCIENTIFIC_BLUE_DARK,
@@ -408,12 +444,13 @@ def plot_histogram(rows, output_path, dpi):
 def plot_box_chart(rows, output_path, dpi):
     grouped = group_by_noise(rows)
     noise_labels = ordered_noise_types(grouped.keys())
+    display_noise_labels = [format_noise_label(noise) for noise in noise_labels]
     values = [grouped[noise] for noise in noise_labels]
 
     fig, ax = create_figure((7.6, 4.8))
     box = ax.boxplot(
         values,
-        labels=noise_labels,
+        labels=display_noise_labels,
         patch_artist=True,
         widths=0.6,
         medianprops={'color': SCIENTIFIC_BLUE_DARK, 'linewidth': 1.2},
@@ -440,6 +477,7 @@ def plot_box_chart(rows, output_path, dpi):
 
 def plot_heatmap(rows, output_path, dpi, subject_display_map, x_label):
     noise_labels = sorted({row['noise_type'] for row in rows}, key=noise_sort_key)
+    display_noise_labels = [format_noise_label(noise) for noise in noise_labels]
     subjects, matrix = build_subject_noise_matrix(rows, subject_display_map, noise_labels)
     if not subjects:
         raise ValueError('No subject rows available for heatmap: %s' % os.path.abspath(output_path))
@@ -468,7 +506,7 @@ def plot_heatmap(rows, output_path, dpi, subject_display_map, x_label):
     )
 
     ax.set_xticks(range(len(noise_labels)))
-    ax.set_xticklabels(noise_labels, rotation=30, ha='right')
+    ax.set_xticklabels(display_noise_labels, rotation=30, ha='right')
     ax.set_yticks(range(len(subjects)))
     ax.set_yticklabels(subjects)
     ax.set_xlabel(x_label)

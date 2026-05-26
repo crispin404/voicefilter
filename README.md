@@ -1,8 +1,7 @@
-# SnoreFilter 个体化鼾声增强
+# SnoreFilter 个性化鼾声增强
 
-`SnoreFilter` 是一个面向毕业设计场景的个体化鼾声增强项目。它利用同一被试的 5 段元音 `a/e/i/o/u` 作为身份条件，从“鼾声 + 环境音”的混合音中恢复目标被试的增强鼾声音频。默认会对 5 个元音分别编码后取均值；也可以在配置中切换为只使用单个元音 `a/e/i/o/u` 做对比实验。
+`SnoreFilter` 是我本科毕业设计做的个性化鼾声增强项目。它利用同一被试的 5 段元音 `a/e/i/o/u` 作为身份条件，从“鼾声 + 环境音”的混合音中恢复目标被试的增强鼾声音频。默认会对 5 个元音分别编码后取均值；也可以在配置中切换为只使用单个元音 `a/e/i/o/u` 做对比实验。
 
-仓库当前真实目录名仍然是 `voicefilter`，所以下文中的示例路径继续写成 `F:\voicefilter` 或 Platformax 上的 `.../voicefilter`；这只是为了和你现在的实际运行环境保持一致，项目对外名称统一使用 `SnoreFilter`。
 
 ## 项目定位
 
@@ -136,7 +135,6 @@ evaluate
 ### 1. 安装依赖
 
 ```powershell
-cd F:\voicefilter
 pip install -r requirements.txt
 ```
 

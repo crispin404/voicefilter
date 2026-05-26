@@ -1,11 +1,11 @@
 # SnoreFilter Platformax GPU 运行说明
 
-本说明用于在 Platformax JupyterLab 终端运行 `SnoreFilter` 的全量 GPU 流程。项目对外名称已经统一为 `SnoreFilter`，但仓库当前真实目录名仍是 `voicefilter`，因此下面的路径示例继续保留真实可运行写法。
+本说明用于在 Platformax JupyterLab 终端运行 `SnoreFilter` 的全量 GPU 流程。
 
-推荐项目目录示例：
+项目目录示例：
 
 ```bash
-/opt/data/private/mel-data/毕设/voicefilter
+/opt/data/private/mel-data/毕设/snorefilter
 ```
 
 如果你的项目实际放在其他位置，也没有关系，关键是后续命令都在“项目根目录”下执行，并保持目录结构一致。
@@ -90,10 +90,12 @@ python scripts/evaluate_enhancement.py -c config/platform_gpu.yaml --noise-count
 
 `pretrained/` 和 `data/` 默认不会进 git，需要单独上传到平台。
 
+## 环境配置
+
 ### 进入项目目录
 
 ```bash
-cd /opt/data/private/mel-data/毕设/voicefilter
+cd /opt/data/private/mel-data/毕设/snorefilter
 ```
 
 ### 安装平台依赖
@@ -603,7 +605,9 @@ python scripts/plot_evaluation_figures.py
   - `si_sdr_improvement_subject_noise_combo_heatmap_3noise.png`
 - 所有图片默认输出到 `outputs/figures`
 - 图内不放标题，坐标轴和 colorbar 使用中文标签，适合直接插入论文正文
-- 如果 `metadata/subjects.json` 存在，脚本会优先用它做人名映射；否则会把类似 `2022_09_06_周前进` 的 `subject_id` 自动显示成 `周前进`
+- 人员相关图片会把固定被试匿名显示为 `subject 1` 到 `subject 5`，并按这个顺序从上到下排列
+- 噪声代号会在图片里显示为英文标签，例如 `dpt` 显示为 `sneeze`，组合噪声会保留 `+` 连接
+- 如果 `metadata/subjects.json` 存在，脚本会优先用它做人名映射后再做匿名显示；否则会把类似 `2022_09_06_周前进` 的 `subject_id` 自动规范化后再显示
 
 如果你想自定义输入输出目录，可以这样运行：
 

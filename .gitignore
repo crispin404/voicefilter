@@ -4,6 +4,8 @@ config/*
 !config/enhancement.yaml
 !config/platform_gpu.yaml
 
+.claude/
+.vscode/
 
 temp/
 chkpt/
